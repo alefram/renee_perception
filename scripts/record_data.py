@@ -15,46 +15,41 @@ Modes (--mode):
 
 Output layout (written to zed_highres_<timestamp>/ by default, or
 --output-name <name>/ if given):
-    rgb/         rgb_<timestamp>.png, rgb_video_<timestamp>.mp4
-    depth/       depth_<timestamp>.png (16-bit mm), depth_raw_<timestamp>.npy
-                 (float32 meters), depth_video_<timestamp>.mp4 (colormap)
-    intrinsics/  camera_intrinsics.json
+    rgb/          rgb_<timestamp>.png (image mode); frame_<i>.png + rgb_video_<ts>.mp4 (video mode)
+    depth_mm/     frame_<i>.png (16-bit mm, video mode only)
+    depth/        depth_<timestamp>.png (16-bit mm), depth_raw_<timestamp|frame>.npy
+                  (float32 meters), depth_video_<timestamp>.mp4 (colormap, video mode)
+    intrinsics/   camera_intrinsics.json
+    frames.jsonl  video mode only: per-frame {frame_index, rgb, depth_mm} manifest --
+                  this + rgb/ + depth_mm/ is exactly what renee_perception's
+                  perception.io.session_from_extracted reads, so a video-mode
+                  session is immediately usable with scripts/build_pointcloud.py,
+                  no scripts/extract_video_frames.py step needed.
 
 Examples:
     python3 zed_data_capturing.py --mode image
     python3 zed_data_capturing.py --mode video --duration 10
     python3 zed_data_capturing.py --preset high --depth-mode ULTRA
     python3 zed_data_capturing.py --mode video --output-name kitchen_scan_01
+
+    # then, directly (no extract_video_frames.py needed for video-mode captures):
+    python3 build_pointcloud.py kitchen_scan_01 --intrinsics kitchen_scan_01/intrinsics/camera_intrinsics.json
 """
 
-import pyzed.sl as sl
 import numpy as np
 import cv2
 import os
 from datetime import datetime
 import json
 import argparse
+import sys
+from pathlib import Path
 
-# ZED resolution presets: name -> (sl.RESOLUTION, width, height)
-RESOLUTIONS = {
-    "HD2K": (sl.RESOLUTION.HD2K, 2208, 1242),
-    "HD1080": (sl.RESOLUTION.HD1080, 1920, 1080),
-    "HD720": (sl.RESOLUTION.HD720, 1280, 720),
-    "VGA": (sl.RESOLUTION.VGA, 672, 376),
-}
+SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-DEPTH_MODES = {
-    "NEURAL": sl.DEPTH_MODE.NEURAL,
-    "ULTRA": sl.DEPTH_MODE.ULTRA,
-    "QUALITY": sl.DEPTH_MODE.QUALITY,
-    "PERFORMANCE": sl.DEPTH_MODE.PERFORMANCE,
-}
-
-
-def closest_resolution_name(width, height):
-    """Pick the ZED resolution preset whose pixel count is closest to the requested size"""
-    target = width * height
-    return min(RESOLUTIONS, key=lambda name: abs(RESOLUTIONS[name][1] * RESOLUTIONS[name][2] - target))
+from perception.drivers.zed import ZedCamera, closest_resolution_name  # noqa: E402
 
 
 class ZED2iHighResCapture:
@@ -74,45 +69,27 @@ class ZED2iHighResCapture:
         self.requested_width = width
         self.requested_height = height
         self.depth_mode_name = depth_mode
-
-        self.zed = sl.Camera()
-        self.runtime_params = sl.RuntimeParameters()
-        self.runtime_params.enable_depth = True
+        self.camera = ZedCamera()
 
         resolution_name = closest_resolution_name(width, height)
         print(f"Configuring stream:")
         print(f"  Requested: {width}x{height} at {fps} FPS")
         print(f"  Using ZED preset: {resolution_name}")
 
-        # Create directories for saving data
-        self.create_directories(output_name)
-
         if not self.open_camera(resolution_name, fps):
             print("Trying fallback resolutions...")
             self.try_fallback_resolutions()
+        else:
+            print(f"✓ Camera opened successfully at {self.camera.width}x{self.camera.height} @ {self.camera.fps}fps")
+            self.create_directories(output_name)
 
         # Get camera intrinsics
         self.get_camera_intrinsics()
 
-        # Mats reused across grabs
-        self.image_mat = sl.Mat()
-        self.depth_mat = sl.Mat()
-
     def open_camera(self, resolution_name, fps):
         """Attempt to open the ZED camera with the given resolution/fps"""
-        init_params = sl.InitParameters()
-        init_params.camera_resolution = RESOLUTIONS[resolution_name][0]
-        init_params.camera_fps = fps
-        init_params.coordinate_units = sl.UNIT.METER
-        init_params.coordinate_system = sl.COORDINATE_SYSTEM.RIGHT_HANDED_Y_UP
-        init_params.depth_mode = DEPTH_MODES[self.depth_mode_name]
-        init_params.depth_minimum_distance = 0.3
-        init_params.depth_maximum_distance = 20.0
-
-        status = self.zed.open(init_params)
-        if status == sl.ERROR_CODE.SUCCESS:
-            _, self.width, self.height = RESOLUTIONS[resolution_name]
-            self.fps = fps
+        ok, status = self.camera.open(resolution_name, fps, self.depth_mode_name)
+        if ok:
             print("✓ ZED 2i camera initialized successfully!")
             return True
 
@@ -143,41 +120,30 @@ class ZED2iHighResCapture:
 
         self.rgb_dir = os.path.join(self.base_dir, "rgb")
         self.depth_dir = os.path.join(self.base_dir, "depth")
+        self.depth_mm_dir = os.path.join(self.base_dir, "depth_mm")
         self.intrinsics_dir = os.path.join(self.base_dir, "intrinsics")
 
         os.makedirs(self.rgb_dir, exist_ok=True)
         os.makedirs(self.depth_dir, exist_ok=True)
+        os.makedirs(self.depth_mm_dir, exist_ok=True)
         os.makedirs(self.intrinsics_dir, exist_ok=True)
 
         print(f"Created directories in: {self.base_dir}")
 
-    @staticmethod
-    def _camera_params_to_matrix(params):
-        """Build a 3x3 camera matrix and distortion vector from ZED calibration parameters"""
-        camera_matrix = np.array([
-            [params.fx, 0, params.cx],
-            [0, params.fy, params.cy],
-            [0, 0, 1]
-        ])
-        dist_coeffs = np.array(params.disto)
-        return camera_matrix, dist_coeffs
-
     def get_camera_intrinsics(self):
         """Get camera intrinsic parameters"""
-        camera_info = self.zed.get_camera_information()
-        calibration = camera_info.camera_configuration.calibration_parameters
-
         # Left (color) camera intrinsics
-        self.color_camera_matrix, self.color_dist_coeffs = self._camera_params_to_matrix(calibration.left_cam)
+        self.color_camera_matrix, self.color_dist_coeffs = self.camera.get_intrinsics()
 
         # Depth is computed on the rectified left image, so it shares the color camera's intrinsics
-        self.depth_camera_matrix, self.depth_dist_coeffs = self._camera_params_to_matrix(calibration.left_cam)
+        self.depth_camera_matrix, self.depth_dist_coeffs = self.color_camera_matrix, self.color_dist_coeffs
 
         # Save intrinsics to file
         self.save_intrinsics()
 
         print("Camera intrinsics loaded and saved!")
-        print(f"Left camera focal length: fx={calibration.left_cam.fx:.2f}, fy={calibration.left_cam.fy:.2f}")
+        fx, fy = self.color_camera_matrix[0, 0], self.color_camera_matrix[1, 1]
+        print(f"Left camera focal length: fx={fx:.2f}, fy={fy:.2f}")
 
     def save_intrinsics(self):
         """Save camera intrinsic parameters to JSON file"""
@@ -185,18 +151,18 @@ class ZED2iHighResCapture:
             "color_camera": {
                 "camera_matrix": self.color_camera_matrix.tolist(),
                 "distortion_coefficients": self.color_dist_coeffs.tolist(),
-                "width": self.width,
-                "height": self.height
+                "width": self.camera.width,
+                "height": self.camera.height
             },
             "depth_camera": {
                 "camera_matrix": self.depth_camera_matrix.tolist(),
                 "distortion_coefficients": self.depth_dist_coeffs.tolist(),
-                "width": self.width,
-                "height": self.height
+                "width": self.camera.width,
+                "height": self.camera.height
             },
             "stream_info": {
-                "resolution": f"{self.width}x{self.height}",
-                "fps": self.fps,
+                "resolution": f"{self.camera.width}x{self.camera.height}",
+                "fps": self.camera.fps,
                 "depth_mode": self.depth_mode_name,
                 "note": "Depth is computed on the rectified left image, so it shares the color camera's intrinsics"
             }
@@ -210,17 +176,12 @@ class ZED2iHighResCapture:
 
     def _grab_frame(self):
         """Grab a frame and return (color_bgr, depth_m) or (None, None) on failure"""
-        status = self.zed.grab(self.runtime_params)
-        if status != sl.ERROR_CODE.SUCCESS:
+        ok, _ = self.camera.grab()
+        if not ok:
             return None, None
 
-        self.zed.retrieve_image(self.image_mat, sl.VIEW.LEFT)
-        self.zed.retrieve_measure(self.depth_mat, sl.MEASURE.DEPTH)
-
-        color_bgra = self.image_mat.get_data()
+        color_bgra, depth_m = self.camera.retrieve_rgb_depth()
         color_bgr = cv2.cvtColor(color_bgra, cv2.COLOR_BGRA2BGR)
-        depth_m = np.asarray(self.depth_mat.get_data(), dtype=np.float32).copy()
-
         return color_bgr, depth_m
 
     @staticmethod
@@ -261,7 +222,7 @@ class ZED2iHighResCapture:
             print(f"✓ Captured high-res image pair: {timestamp}")
             print(f"  RGB: {rgb_filename} ({color_image.shape[1]}x{color_image.shape[0]})")
             print(f"  Depth: {depth_filename} ({depth_image.shape[1]}x{depth_image.shape[0]})")
-            print(f"  Both streams at matching {self.width}x{self.height} resolution")
+            print(f"  Both streams at matching {self.camera.width}x{self.camera.height} resolution")
             return True
 
         except Exception as e:
@@ -270,8 +231,13 @@ class ZED2iHighResCapture:
 
     def record_video(self, duration_seconds=None):
         """
-        Record high-resolution video with both RGB and depth data
-        Also saves raw depth data for each frame
+        Record high-resolution video with both RGB and depth data.
+
+        Besides the preview video/raw-depth files, writes per-frame
+        rgb/frame_<i>.png + depth_mm/frame_<i>.png + frames.jsonl directly in
+        self.base_dir -- the same layout extract_video_frames.py produces from
+        a video, so this session is immediately usable with
+        renee_perception's scripts/build_pointcloud.py (no extraction step).
 
         Args:
             duration_seconds (int): Recording duration. If None, record until 'q' is pressed
@@ -285,19 +251,22 @@ class ZED2iHighResCapture:
         depth_video_path = os.path.join(self.depth_dir, f"depth_video_{timestamp}.mp4")
 
         # Use same resolution for both RGB and depth video
-        rgb_writer = cv2.VideoWriter(rgb_video_path, fourcc, self.fps,
-                                   (self.width, self.height))
+        rgb_writer = cv2.VideoWriter(rgb_video_path, fourcc, self.camera.fps,
+                                   (self.camera.width, self.camera.height))
 
-        depth_writer = cv2.VideoWriter(depth_video_path, fourcc, self.fps,
-                                     (self.width, self.height))
+        depth_writer = cv2.VideoWriter(depth_video_path, fourcc, self.camera.fps,
+                                     (self.camera.width, self.camera.height))
+
+        manifest_path = os.path.join(self.base_dir, "frames.jsonl")
+        manifest_file = open(manifest_path, "w", encoding="utf-8")
 
         print(f"Recording high-resolution video...")
-        print(f"  Resolution: {self.width}x{self.height} (both RGB and depth)")
+        print(f"  Resolution: {self.camera.width}x{self.camera.height} (both RGB and depth)")
         print(f"  Raw depth data will be saved for each frame")
         print(f"  {'Press q to stop' if duration_seconds is None else f'Recording for {duration_seconds} seconds'}")
 
         frame_count = 0
-        max_frames = duration_seconds * self.fps if duration_seconds else float('inf')
+        max_frames = duration_seconds * self.camera.fps if duration_seconds else float('inf')
 
         try:
             while frame_count < max_frames:
@@ -308,25 +277,39 @@ class ZED2iHighResCapture:
 
                 # Generate frame-specific timestamp
                 frame_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                stem = f"frame_{frame_count:06d}"
 
                 # Save raw depth data as numpy array for precise measurements
                 depth_raw_filename = os.path.join(self.depth_dir, f"depth_raw_frame_{frame_count:06d}_{frame_timestamp}.npy")
                 np.save(depth_raw_filename, depth_m)
 
-                # Convert depth to 8-bit for video (normalize)
+                # 16-bit mm depth (what build_pointcloud.py's TSDF fusion reads)
                 depth_image = self._depth_to_uint16_mm(depth_m)
+
+                # Per-frame rgb + depth_mm PNGs + manifest entry -> ready for
+                # perception.io.session_from_extracted, no extraction step needed
+                rgb_png_path = os.path.join(self.rgb_dir, f"{stem}.png")
+                depth_mm_path = os.path.join(self.depth_mm_dir, f"{stem}.png")
+                cv2.imwrite(rgb_png_path, color_image)
+                cv2.imwrite(depth_mm_path, depth_image)
+                manifest_file.write(json.dumps({
+                    "frame_index": frame_count,
+                    "rgb": f"rgb/{stem}.png",
+                    "depth_mm": f"depth_mm/{stem}.png",
+                }) + "\n")
+
                 depth_colormap = cv2.applyColorMap(
                     cv2.convertScaleAbs(depth_image, alpha=0.03),
                     cv2.COLORMAP_JET
                 )
 
-                # Write frames
+                # Write preview videos
                 rgb_writer.write(color_image)
                 depth_writer.write(depth_colormap)
 
                 # Display frames (no scaling needed since both streams are same resolution)
-                cv2.imshow(f'RGB ({self.width}x{self.height})', color_image)
-                cv2.imshow(f'Depth ({self.width}x{self.height})', depth_colormap)
+                cv2.imshow(f'RGB ({self.camera.width}x{self.camera.height})', color_image)
+                cv2.imshow(f'Depth ({self.camera.width}x{self.camera.height})', depth_colormap)
 
                 # Check for quit key
                 if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -345,20 +328,22 @@ class ZED2iHighResCapture:
             # Release video writers
             rgb_writer.release()
             depth_writer.release()
+            manifest_file.close()
             cv2.destroyAllWindows()
 
             print(f"✓ High-resolution video saved:")
             print(f"  RGB: {rgb_video_path}")
             print(f"  Depth: {depth_video_path}")
             print(f"  Raw depth frames: {frame_count} .npy files in {self.depth_dir}")
+            print(f"  Per-frame rgb/depth_mm PNGs + {manifest_path} ready for build_pointcloud.py")
             print(f"  Frames recorded: {frame_count}")
-            print(f"  Duration: {frame_count/self.fps:.2f} seconds")
+            print(f"  Duration: {frame_count/self.camera.fps:.2f} seconds")
 
     def live_preview(self):
         """Show live preview of high-resolution RGB and depth streams"""
         print("High-resolution live preview")
         print("Controls: 'c' = capture image, 'r' = record video, 'q' = quit")
-        print(f"Streaming at {self.width}x{self.height} for both RGB and depth")
+        print(f"Streaming at {self.camera.width}x{self.camera.height} for both RGB and depth")
 
         try:
             while True:
@@ -375,8 +360,8 @@ class ZED2iHighResCapture:
                 )
 
                 # Display images (both at same resolution)
-                cv2.imshow(f'RGB Live ({self.width}x{self.height})', color_image)
-                cv2.imshow(f'Depth Live ({self.width}x{self.height})', depth_colormap)
+                cv2.imshow(f'RGB Live ({self.camera.width}x{self.camera.height})', color_image)
+                cv2.imshow(f'Depth Live ({self.camera.width}x{self.camera.height})', depth_colormap)
 
                 # Handle key presses
                 key = cv2.waitKey(1) & 0xFF
@@ -400,7 +385,7 @@ class ZED2iHighResCapture:
     def get_device_info(self):
         """Print detailed device information"""
         try:
-            devices = sl.Camera.get_device_list()
+            devices = self.camera.list_devices()
 
             if not devices:
                 print("No ZED devices found")
@@ -408,18 +393,17 @@ class ZED2iHighResCapture:
 
             print(f"\n=== Available Devices ===")
             for device in devices:
-                print(f"Model: {device.camera_model}")
-                print(f"Serial: {device.serial_number}")
-                print(f"State: {device.camera_state}")
+                print(f"Model: {device['model']}")
+                print(f"Serial: {device['serial_number']}")
+                print(f"State: {device['state']}")
 
-            if self.zed.is_opened():
-                camera_info = self.zed.get_camera_information()
-                configuration = camera_info.camera_configuration
+            if self.camera.is_opened():
+                info = self.camera.get_active_info()
                 print(f"\n=== Active Device Configuration ===")
-                print(f"Model: {camera_info.camera_model}")
-                print(f"Serial: {camera_info.serial_number}")
-                print(f"Firmware: {configuration.firmware_version}")
-                print(f"Resolution: {configuration.resolution.width}x{configuration.resolution.height} @ {configuration.fps}fps")
+                print(f"Model: {info['model']}")
+                print(f"Serial: {info['serial_number']}")
+                print(f"Firmware: {info['firmware_version']}")
+                print(f"Resolution: {info['width']}x{info['height']} @ {info['fps']}fps")
                 print(f"Depth mode: {self.depth_mode_name}")
 
         except Exception as e:
@@ -427,7 +411,7 @@ class ZED2iHighResCapture:
 
     def cleanup(self):
         """Clean up resources"""
-        self.zed.close()
+        self.camera.close()
         cv2.destroyAllWindows()
         print("Camera resources cleaned up")
 

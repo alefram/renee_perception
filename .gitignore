@@ -1,1 +1,14 @@
 data/
+venv
+.venv/
+**.whl
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+.vscode/
+.idea/
+.DS_Store

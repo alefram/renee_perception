@@ -1,0 +1,25 @@
+[project]
+name = "renee-perception"
+version = "0.1.0"
+description = "RENEE perception: RGB-D capture -> registered point cloud / mesh"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "open3d",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["perception*"]
+
+[tool.setuptools.package-data]
+perception = ["configs/*.yaml"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
