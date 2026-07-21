@@ -4,6 +4,19 @@ RGB-D capture -> registered point cloud / mesh. Adapted from the RENÉE
 cleaning pipeline's Scan-0 acquisition stage, scoped down to point-cloud
 generation only (no coverage planning, path/strip generation, or execution).
 
+## Layout
+
+```
+pyproject.toml / setup.py   packaging (src-layout: package lives under src/)
+src/perception/             the installable package
+    drivers/                 camera hardware drivers (e.g. zed.py, ZED SDK wrapper)
+    configs/                  pipeline parameter YAMLs (fusion.yaml)
+    io.py / odometry.py / fusion.py / cleanup.py / contracts.py
+tests/                       pytest suite (synthetic RGB-D fixtures, no hardware needed)
+scripts/                     standalone entry points for the offline pipeline (below)
+ros/                         ament_cmake package.xml + CMakeLists.txt (ROS 2 build)
+```
+
 ## Pipeline
 
 ```bash

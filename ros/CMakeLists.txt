@@ -7,12 +7,6 @@ find_package(rclpy REQUIRED)
 
 ament_python_install_package(perception PACKAGE_DIR ../src/perception)
 
-install(PROGRAMS
-  ../src/perception/camera_capture_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME camera_capture_node
-)
-
 install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}

@@ -12,12 +12,7 @@ setup(
     zip_safe=True,
     maintainer='Alexis',
     maintainer_email='fraumalex@gmail.com',
-    description='RENEE perception: camera capture action server plus offline RGB-D capture -> registered point cloud / mesh tooling.',
+    description='RENEE perception: offline RGB-D capture -> registered point cloud / mesh tooling.',
     license='TODO: License declaration',
     tests_require=['pytest'],
-    entry_points={
-        'console_scripts': [
-            'camera_capture_node = perception.camera_capture_node:main',
-        ],
-    },
 )
