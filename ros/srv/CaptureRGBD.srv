@@ -1,0 +1,8 @@
+# Capture one synchronized RGB-D keyframe from the latest camera data.
+
+string waypoint_id
+string session_dir
+---
+bool success
+string message
+renee_perception/CapturedRgbdFrame frame
