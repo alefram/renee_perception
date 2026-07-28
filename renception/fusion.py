@@ -8,7 +8,7 @@ GPU integration on a machine with a CUDA-enabled Open3D build) at its given
 world pose; the zero level set is then extracted as a point cloud and a
 triangle mesh (marching cubes). Poses are an explicit argument (not read off
 ``Keyframe.T_world_cam``): callers decide whether they come from
-``perception.odometry.estimate_poses`` (real data) or are already known
+``renception.odometry.estimate_poses`` (real data) or are already known
 (synthetic tests), which keeps fusion decoupled from how poses were obtained.
 """
 

@@ -21,19 +21,19 @@ Output layout (written to zed_highres_<timestamp>/ by default, or
                   (float32 meters), depth_video_<timestamp>.mp4 (colormap, video mode)
     intrinsics/   camera_intrinsics.json
     frames.jsonl  video mode only: per-frame {frame_index, rgb, depth_mm} manifest --
-                  this + rgb/ + depth_mm/ is exactly what renee_perception's
-                  perception.io.session_from_extracted reads, so a video-mode
-                  session is immediately usable with scripts/build_pointcloud.py,
-                  no scripts/extract_video_frames.py step needed.
+                  this + rgb/ + depth_mm/ is exactly what
+                  renception.io.session_from_extracted reads, so a video-mode
+                  session is immediately usable with tools/build_pointcloud.py,
+                  no tools/extract_video_frames.py step needed.
 
 Examples:
-    python3 zed_data_capturing.py --mode image
-    python3 zed_data_capturing.py --mode video --duration 10
-    python3 zed_data_capturing.py --preset high --depth-mode ULTRA
-    python3 zed_data_capturing.py --mode video --output-name kitchen_scan_01
+    python3 tools/record_data.py --mode image
+    python3 tools/record_data.py --mode video --duration 10
+    python3 tools/record_data.py --preset high --depth-mode ULTRA
+    python3 tools/record_data.py --mode video --output-name kitchen_scan_01
 
-    # then, directly (no extract_video_frames.py needed for video-mode captures):
-    python3 build_pointcloud.py kitchen_scan_01 --intrinsics kitchen_scan_01/intrinsics/camera_intrinsics.json
+    # then, directly (no tools/extract_video_frames.py needed for video-mode captures):
+    python3 tools/build_pointcloud.py kitchen_scan_01 --intrinsics kitchen_scan_01/intrinsics/camera_intrinsics.json
 """
 
 import numpy as np
@@ -45,11 +45,11 @@ import argparse
 import sys
 from pathlib import Path
 
-SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-from perception.drivers.zed import ZedCamera, closest_resolution_name  # noqa: E402
+from renception.drivers.zed import ZedCamera, closest_resolution_name  # noqa: E402
 
 
 class ZED2iHighResCapture:
@@ -237,7 +237,7 @@ class ZED2iHighResCapture:
         rgb/frame_<i>.png + depth_mm/frame_<i>.png + frames.jsonl directly in
         self.base_dir -- the same layout extract_video_frames.py produces from
         a video, so this session is immediately usable with
-        renee_perception's scripts/build_pointcloud.py (no extraction step).
+        tools/build_pointcloud.py (no extraction step).
 
         Args:
             duration_seconds (int): Recording duration. If None, record until 'q' is pressed
@@ -287,7 +287,7 @@ class ZED2iHighResCapture:
                 depth_image = self._depth_to_uint16_mm(depth_m)
 
                 # Per-frame rgb + depth_mm PNGs + manifest entry -> ready for
-                # perception.io.session_from_extracted, no extraction step needed
+                # renception.io.session_from_extracted, no extraction step needed
                 rgb_png_path = os.path.join(self.rgb_dir, f"{stem}.png")
                 depth_mm_path = os.path.join(self.depth_mm_dir, f"{stem}.png")
                 cv2.imwrite(rgb_png_path, color_image)

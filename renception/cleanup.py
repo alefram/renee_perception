@@ -3,7 +3,7 @@
 
 Ported from the RENEE cleaning pipeline's ``cleaning/surface/meshing.py``
 (same filters, same ``cleanup.*`` config keys) so a session fused by
-``perception.fusion.fuse_session`` can be de-noised and, when the camera
+``renception.fusion.fuse_session`` can be de-noised and, when the camera
 orbited a single isolated object, have disconnected background left over
 from TSDF integration discarded -- without switching mesh reconstruction
 away from marching cubes.

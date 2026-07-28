@@ -11,17 +11,17 @@ alongside the capture.
     4. writes fused_cloud.ply, tsdf_mesh.ply, session.json into the session dir
 
 Usage:
-    python scripts/build_pointcloud.py \\
+    python tools/build_pointcloud.py \\
         data/alex_dataset/extracted/session_144058 \\
         --intrinsics data/alex_dataset/intrinsics/camera_intrinsics.json
 
     # sanity-check on a subset first (real sessions can be thousands of frames)
-    python scripts/build_pointcloud.py <session> --intrinsics <intrinsics.json> --stride 10
+    python tools/build_pointcloud.py <session> --intrinsics <intrinsics.json> --stride 10
 
     # room-scale capture: the default voxel (8mm, tuned for ~0.5m fixtures) will
     # OOM on a multi-metre TSDF volume -- use a coarser voxel and a tighter
     # depth range to keep the volume small
-    python scripts/build_pointcloud.py <session> --intrinsics <intrinsics.json> \\
+    python tools/build_pointcloud.py <session> --intrinsics <intrinsics.json> \\
         --voxel 0.02 --depth-trunc 3.0
 """
 
@@ -31,13 +31,13 @@ import argparse
 import sys
 from pathlib import Path
 
-SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-from perception.config import load_config  # noqa: E402
-from perception import io as sio  # noqa: E402
-from perception import odometry, fusion  # noqa: E402
+from renception.config import load_config  # noqa: E402
+from renception import io as sio  # noqa: E402
+from renception import odometry, fusion  # noqa: E402
 
 
 def build(session_dir: Path, intrinsics_path: Path, cfg: dict, fps: float,

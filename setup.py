@@ -1,13 +1,12 @@
 from setuptools import find_packages, setup
 
-package_name = 'renee_perception'
+package_name = 'renception'
 
 setup(
     name=package_name,
     version='0.1.0',
-    package_dir={'': 'src'},
-    packages=find_packages(where='src'),
-    package_data={'perception': ['configs/*.yaml']},
+    packages=find_packages(where='.'),
+    package_data={'renception': ['configs/*.yaml']},
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Alexis',

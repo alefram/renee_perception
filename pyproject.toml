@@ -1,5 +1,5 @@
 [project]
-name = "renee-perception"
+name = "renception"
 version = "0.1.0"
 description = "RENEE perception: RGB-D capture -> registered point cloud / mesh"
 requires-python = ">=3.10"
@@ -14,11 +14,11 @@ dependencies = [
 test = ["pytest"]
 
 [tool.setuptools.packages.find]
-where = ["src"]
-include = ["perception*"]
+where = ["."]
+include = ["renception*"]
 
 [tool.setuptools.package-data]
-perception = ["configs/*.yaml"]
+renception = ["configs/*.yaml"]
 
 [build-system]
 requires = ["setuptools>=61.0"]

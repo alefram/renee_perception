@@ -1,11 +1,12 @@
+#!/usr/bin/env python3
 """RGB-D odometry + pose graph pose estimation, against known synthetic poses."""
 
 from __future__ import annotations
 
 import numpy as np
 
-from perception import io as sio
-from perception import odometry
+from renception import io as sio
+from renception import odometry
 
 
 def test_estimate_poses_matches_ground_truth(synth_session, synth_cfg):
@@ -25,3 +26,4 @@ def test_estimate_poses_matches_ground_truth(synth_session, synth_cfg):
         R_err = est[:3, :3].T @ gt[:3, :3]
         angle = np.degrees(np.arccos(np.clip((np.trace(R_err) - 1) / 2, -1, 1)))
         assert angle < 10.0, f"rotation error {angle:.1f} deg too large"
+ 

@@ -1,5 +1,5 @@
 # Point-cloud generation pipeline parameters.
-# No magic numbers in code — every tunable used by perception/*.py lives here.
+# No magic numbers in code — every tunable used by renception/*.py lives here.
 
 odometry:
   depth_trunc: 6.0                    # ignore depth beyond this range [m]

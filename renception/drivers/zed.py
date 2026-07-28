@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """ZED SDK camera driver.
 
-Every ``pyzed.sl`` symbol used by the capture scripts (``scripts/record_data.py``,
-``scripts/live_pointcloud_zed.py``) is confined to this module, behind
+Every ``pyzed.sl`` symbol used by the capture tools is confined to this module, behind
 :class:`ZedCamera` and the helpers below. The scripts themselves only deal in
 plain numpy arrays, strings and booleans -- swapping in another camera later
 means writing a new driver module with the same shape, not touching the

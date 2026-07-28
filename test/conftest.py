@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Shared pytest fixtures: a small synthetic RGB-D orbit around a textured
 box, written to disk in the exact layout ``extract_video_frames.py`` produces
 (``frames.jsonl`` + ``rgb/`` + ``depth_mm/``), so tests exercise the same
@@ -18,11 +19,11 @@ import numpy as np
 import open3d as o3d
 import pytest
 
-SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-from perception.config import load_config  # noqa: E402
+from renception.config import load_config  # noqa: E402
 
 WIDTH, HEIGHT = 160, 120
 FX = FY = 150.0

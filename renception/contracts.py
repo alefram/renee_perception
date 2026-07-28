@@ -50,7 +50,7 @@ class Keyframe:
     """A single RGB-D capture.
 
     ``T_world_cam`` is ``None`` until a pose has been estimated (see
-    ``perception.odometry``) — raw captures have no pose attached.
+    ``renception.odometry``) — raw captures have no pose attached.
     """
 
     rgb_path: str  # PNG

@@ -1,11 +1,12 @@
+#!/usr/bin/env python3
 """TSDF fusion of a synthetic RGB-D session into a point cloud + mesh."""
 
 from __future__ import annotations
 
 import numpy as np
 
-from perception import fusion
-from perception import io as sio
+from renception import fusion
+from renception import io as sio
 
 
 def test_fuse_session_reconstructs_box(synth_session, synth_cfg, ground_truth_mesh):
@@ -24,7 +25,7 @@ def test_fuse_session_reconstructs_box(synth_session, synth_cfg, ground_truth_me
 def test_build_pointcloud_script_writes_session(synth_session, synth_cfg, tmp_path):
     import shutil
 
-    from scripts import build_pointcloud
+    from tools import build_pointcloud
 
     session_dir, intrinsics_path, _gt_world, _gt_rel = synth_session
     work = tmp_path / "sess"

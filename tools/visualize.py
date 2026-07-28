@@ -4,13 +4,13 @@
 Usage:
     # a session dir built by build_pointcloud.py (looks for fused_cloud.ply /
     # tsdf_mesh.ply inside it, plus session.json for camera poses)
-    python scripts/visualize.py data/alex_dataset/extracted/session_144058
+    python tools/visualize.py data/alex_dataset/extracted/session_144058
 
     # the session.json directly -- cloud/mesh paths + camera poses come from it
-    python scripts/visualize.py data/alex_dataset/extracted/session_144058/session.json
+    python tools/visualize.py data/alex_dataset/extracted/session_144058/session.json
 
     # or point it at any .ply directly (no camera frames, nothing to read them from)
-    python scripts/visualize.py data/alex_dataset/extracted/session_144058/fused_cloud.ply
+    python tools/visualize.py data/alex_dataset/extracted/session_144058/fused_cloud.ply
 
 Flags:
     --mesh-only / --cloud-only   show just one of the two artefacts
@@ -24,14 +24,14 @@ import argparse
 import sys
 from pathlib import Path
 
-SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
 import open3d as o3d
 
-from perception.contracts import ScanSession  # noqa: E402
+from renception.contracts import ScanSession  # noqa: E402
 
 
 def _camera_frames(session_json: Path, every: int, size: float = 0.05) -> list:
@@ -85,7 +85,7 @@ def main() -> None:
         if not geometries:
             raise FileNotFoundError(
                 f"no fused_cloud.ply or tsdf_mesh.ply found for {args.path} "
-                "-- run scripts/build_pointcloud.py on this session first")
+                "-- run tools/build_pointcloud.py on this session first")
     else:
         suffix = args.path.suffix.lower()
         geom = (o3d.io.read_triangle_mesh(str(args.path)) if suffix in (".obj", ".stl")

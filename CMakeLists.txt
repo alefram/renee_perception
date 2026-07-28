@@ -13,7 +13,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 
-ament_python_install_package(perception PACKAGE_DIR ../src/perception)
+ament_python_install_package(renception)
 
 set(interface_files
   "msg/CapturedRgbdFrame.msg"
@@ -86,6 +86,14 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  tools/build_pointcloud.py
+  tools/extract_video_frames.py
+  tools/record_data.py
+  tools/visualize.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_export_dependencies(rosidl_default_runtime)
 
 if(BUILD_TESTING)
@@ -93,7 +101,7 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(renee_perception_pytest ../tests)
+  ament_add_pytest_test(renee_perception_pytest test)
 endif()
 
 ament_package()

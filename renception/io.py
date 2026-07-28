@@ -71,12 +71,12 @@ def _load_intrinsics_matrix(intrinsics_path: str | Path) -> tuple[np.ndarray, in
 def session_from_extracted(session_dir: str | Path, intrinsics_path: str | Path,
                            fps: float = 30.0) -> ScanSession:
     """Build a (pose-less) ScanSession from a directory produced by
-    ``scripts/extract_video_frames.py`` (``frames.jsonl`` + ``rgb/`` +
+    ``tools/extract_video_frames.py`` (``frames.jsonl`` + ``rgb/`` +
     ``depth_mm/``).
 
     Frame indices become ``timestamp = frame_index / fps`` (the manifest has
     no absolute per-frame time). Poses are left unset (``T_world_cam=None``);
-    run ``perception.odometry.estimate_poses`` before fusing.
+    run ``renception.odometry.estimate_poses`` before fusing.
     """
     session_dir = Path(session_dir)
     manifest = session_dir / "frames.jsonl"

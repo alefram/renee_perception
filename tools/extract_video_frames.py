@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 Extract image frames from a recorded video (e.g. rgb_video_*.mp4 produced by
-zed_data_capturing.py --mode video), optionally paired with the raw per-frame
+tools/record_data.py --mode video), optionally paired with the raw per-frame
 depth data (.npy) and/or the depth colormap video recorded alongside it.
 
 Frame indices line up 1:1 across rgb_video_*.mp4, depth_video_*.mp4, and
 depth_raw_frame_<index>_<timestamp>.npy, since record_video() in
-zed_data_capturing.py writes all three for every successfully grabbed frame.
+tools/record_data.py writes all three for every successfully grabbed frame.
 
 Output layout (written to --output):
     rgb/                  frame_<index>.png
