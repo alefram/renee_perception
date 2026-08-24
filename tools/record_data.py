@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
 """
-Capture RGB and depth data from a ZED 2i camera using the ZED SDK (pyzed).
+Capture aligned RGB and depth data from a ZED 2i or Intel RealSense camera.
 
-Depth is computed by the SDK directly on the rectified left/color image, so
-RGB and depth are always pixel-aligned at the same resolution with no
-separate alignment step.
+ZED computes depth on its rectified left/color image; RealSense depth is
+explicitly aligned to the colour image.  In both cases RGB and depth are
+pixel-aligned at the same resolution.
 
 Modes (--mode):
     preview  Live RGB/depth view. 'c' capture image, 'r' record video, 'q' quit.
@@ -13,7 +13,7 @@ Modes (--mode):
     video    Record RGB/depth video for --duration seconds (or until 'q').
     info     Print available ZED devices and the active device's configuration.
 
-Output layout (written to zed_highres_<timestamp>/ by default, or
+Output layout (written to <camera>_highres_<timestamp>/ by default, or
 --output-name <name>/ if given):
     rgb/          rgb_<timestamp>.png (image mode); frame_<i>.png + rgb_video_<ts>.mp4 (video mode)
     depth_mm/     frame_<i>.png (16-bit mm, video mode only)
@@ -27,7 +27,9 @@ Output layout (written to zed_highres_<timestamp>/ by default, or
                   no tools/extract_video_frames.py step needed.
 
 Examples:
-    python3 tools/record_data.py --mode image
+    python3 tools/record_data.py --mode image                       # ZED (default)
+    python3 tools/record_data.py --camera realsense --mode image
+    python3 tools/record_data.py --camera realsense --serial-number 123456789
     python3 tools/record_data.py --mode video --duration 10
     python3 tools/record_data.py --preset high --depth-mode ULTRA
     python3 tools/record_data.py --mode video --output-name kitchen_scan_01
@@ -49,11 +51,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from renception.drivers.zed import ZedCamera, closest_resolution_name  # noqa: E402
 
 
-class ZED2iHighResCapture:
-    def __init__(self, width=1280, height=720, fps=30, depth_mode="NEURAL", output_name=None):
+class RGBDHighResCapture:
+    def __init__(self, width=1280, height=720, fps=30, depth_mode="NEURAL", output_name=None,
+                 camera_type="zed", serial_number=None):
         """
         Initialize ZED 2i camera capture. RGB and depth share the same resolution
         because ZED depth is computed directly on the rectified left (color) image,
@@ -69,28 +71,41 @@ class ZED2iHighResCapture:
         self.requested_width = width
         self.requested_height = height
         self.depth_mode_name = depth_mode
-        self.camera = ZedCamera()
+        self.camera_type = camera_type
+        self.camera_label = "ZED" if camera_type == "zed" else "RealSense"
+        if camera_type == "zed":
+            # Import lazily: a RealSense-only machine must not need the ZED SDK.
+            from renception.drivers.zed import ZedCamera
+            self.camera = ZedCamera()
+        else:
+            from renception.drivers.realsense import RealSenseCamera
+            self.camera = RealSenseCamera(serial_number)
 
-        resolution_name = closest_resolution_name(width, height)
         print(f"Configuring stream:")
         print(f"  Requested: {width}x{height} at {fps} FPS")
-        print(f"  Using ZED preset: {resolution_name}")
+        if camera_type == "zed":
+            from renception.drivers.zed import closest_resolution_name
+            resolution_name = closest_resolution_name(width, height)
+            print(f"  Using ZED preset: {resolution_name}")
 
-        if not self.open_camera(resolution_name, fps):
+        if not self.open_camera(width, height, fps):
             print("Trying fallback resolutions...")
             self.try_fallback_resolutions()
-        else:
-            print(f"✓ Camera opened successfully at {self.camera.width}x{self.camera.height} @ {self.camera.fps}fps")
-            self.create_directories(output_name)
+        print(f"✓ Camera opened successfully at {self.camera.width}x{self.camera.height} @ {self.camera.fps}fps")
+        self.create_directories(output_name)
 
         # Get camera intrinsics
         self.get_camera_intrinsics()
 
-    def open_camera(self, resolution_name, fps):
-        """Attempt to open the ZED camera with the given resolution/fps"""
-        ok, status = self.camera.open(resolution_name, fps, self.depth_mode_name)
+    def open_camera(self, width, height, fps):
+        """Attempt to open the selected camera with the requested stream settings."""
+        if self.camera_type == "zed":
+            from renception.drivers.zed import closest_resolution_name
+            ok, status = self.camera.open(closest_resolution_name(width, height), fps, self.depth_mode_name)
+        else:
+            ok, status = self.camera.open(width, height, fps)
         if ok:
-            print("✓ ZED 2i camera initialized successfully!")
+            print(f"✓ {self.camera_label} camera initialized successfully!")
             return True
 
         print(f"✗ Failed to start camera: {status}")
@@ -99,15 +114,14 @@ class ZED2iHighResCapture:
     def try_fallback_resolutions(self):
         """Try different resolution/fps combinations if the initial setup fails"""
         fallback_configs = [
-            ("HD720", 30),
-            ("HD720", 15),
-            ("VGA", 60),
-            ("VGA", 30),
+            (1280, 720, 30),
+            (1280, 720, 15),
+            (640 if self.camera_type == "realsense" else 672, 480 if self.camera_type == "realsense" else 376, 30),
         ]
 
-        for resolution_name, fps in fallback_configs:
-            print(f"Trying: {resolution_name} at {fps}fps")
-            if self.open_camera(resolution_name, fps):
+        for width, height, fps in fallback_configs:
+            print(f"Trying: {width}x{height} at {fps}fps")
+            if self.open_camera(width, height, fps):
                 print(f"✓ Successfully initialized with fallback resolution")
                 return
 
@@ -116,7 +130,7 @@ class ZED2iHighResCapture:
     def create_directories(self, output_name=None):
         """Create directories for saving RGB and depth data"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.base_dir = output_name if output_name else f"zed_highres_{timestamp}"
+        self.base_dir = output_name if output_name else f"{self.camera_type}_highres_{timestamp}"
 
         self.rgb_dir = os.path.join(self.base_dir, "rgb")
         self.depth_dir = os.path.join(self.base_dir, "depth")
@@ -163,8 +177,9 @@ class ZED2iHighResCapture:
             "stream_info": {
                 "resolution": f"{self.camera.width}x{self.camera.height}",
                 "fps": self.camera.fps,
-                "depth_mode": self.depth_mode_name,
-                "note": "Depth is computed on the rectified left image, so it shares the color camera's intrinsics"
+                "camera_type": self.camera_type,
+                "depth_mode": self.depth_mode_name if self.camera_type == "zed" else None,
+                "note": "Depth is aligned to the color image and shares its intrinsics"
             }
         }
 
@@ -180,8 +195,8 @@ class ZED2iHighResCapture:
         if not ok:
             return None, None
 
-        color_bgra, depth_m = self.camera.retrieve_rgb_depth()
-        color_bgr = cv2.cvtColor(color_bgra, cv2.COLOR_BGRA2BGR)
+        color, depth_m = self.camera.retrieve_rgb_depth()
+        color_bgr = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR) if self.camera_type == "zed" else color
         return color_bgr, depth_m
 
     @staticmethod
@@ -404,7 +419,8 @@ class ZED2iHighResCapture:
                 print(f"Serial: {info['serial_number']}")
                 print(f"Firmware: {info['firmware_version']}")
                 print(f"Resolution: {info['width']}x{info['height']} @ {info['fps']}fps")
-                print(f"Depth mode: {self.depth_mode_name}")
+                if self.camera_type == "zed":
+                    print(f"Depth mode: {self.depth_mode_name}")
 
         except Exception as e:
             print(f"Error getting device info: {e}")
@@ -416,19 +432,23 @@ class ZED2iHighResCapture:
         print("Camera resources cleaned up")
 
 def main():
-    parser = argparse.ArgumentParser(description="ZED 2i Camera Capture - Matching RGB/Depth Resolution")
+    parser = argparse.ArgumentParser(description="ZED / Intel RealSense aligned RGB-D capture")
+    parser.add_argument("--camera", choices=["zed", "realsense"], default="zed",
+                      help="Camera backend (default: zed)")
+    parser.add_argument("--serial-number", type=str, default=None,
+                      help="RealSense serial number when more than one device is connected")
     parser.add_argument("--mode", choices=["preview", "image", "video", "info"], default="preview",
                       help="Capture mode: preview (live view), image (single capture), video (record), info (device info)")
     parser.add_argument("--duration", type=int, help="Video recording duration in seconds")
     parser.add_argument("--output-name", type=str, default=None,
-                      help="Name for the output directory (default: zed_highres_<timestamp>)")
+                      help="Name for the output directory (default: <camera>_highres_<timestamp>)")
 
     # Resolution options (same for both RGB and depth)
     parser.add_argument("--width", type=int, default=1280, help="Requested image width for both RGB and depth (default: 1280)")
     parser.add_argument("--height", type=int, default=720, help="Requested image height for both RGB and depth (default: 720)")
     parser.add_argument("--fps", type=int, default=30, help="Frames per second (default: 30)")
     parser.add_argument("--depth-mode", choices=["NEURAL", "ULTRA", "QUALITY", "PERFORMANCE"], default="NEURAL",
-                      help="ZED depth computation mode (default: NEURAL)")
+                      help="ZED depth computation mode; ignored for RealSense (default: NEURAL)")
 
     # Preset options
     parser.add_argument("--preset", choices=["high", "medium", "low"],
@@ -449,7 +469,9 @@ def main():
 
     try:
         # Initialize camera
-        camera = ZED2iHighResCapture(args.width, args.height, args.fps, args.depth_mode, args.output_name)
+        camera = RGBDHighResCapture(
+            args.width, args.height, args.fps, args.depth_mode, args.output_name,
+            args.camera, args.serial_number)
 
         if args.mode == "info":
             camera.get_device_info()
@@ -462,7 +484,7 @@ def main():
 
     except Exception as e:
         print(f"Error: {e}")
-        print("Make sure the ZED 2i camera is connected and pyzed is installed")
+        print(f"Make sure the selected {args.camera} camera is connected and its Python SDK is installed")
 
     finally:
         try:
