@@ -1,44 +1,106 @@
-# Point-cloud generation pipeline parameters.
-# No magic numbers in code — every tunable used by renception/*.py lives here.
+# RENEE Scan-0 (on-board acquisition) parameters.
+#
+# *** EVERY value in this file is a CALIBRATION PARAMETER. ***
+# These are STARTING VALUES to be verified/measured on the real robot before the
+# first real scan. No magic numbers live in the scan code: it all reads from here.
+# Units: metres, degrees, seconds. SI internally.
+#
+# Physical context (drives the design):
+#   - The structure (a Campetella cartesian robot on a support) is RAISED off the
+#     ground, ~0.5-2.5 m. A 2D lidar would look UNDER it -> NO lidar is used for
+#     this task. Perception is ONLY the arm-mounted camera.
+#   - Camera: Stereolabs ZED 2i (2.1mm lens), eye-in-hand on the UR5. Stereo
+#     depth 0.3-20 m, error ~z^2 (<1% @3m) -> orbit can stand farther than the
+#     old D435i if needed; keep 1-2 m for best accuracy.
+#   - Arm: UR5, reach ~0.85 m from its base.
+
+robot:
+  base_mount_z: 0.55         # UR5 base mount height above ground on the Vogui+ [m]
+                             #   -- CALIBRATE (measure on the real robot).
+  arm_reach: 0.85            # UR5 max reach from its base [m] (datasheet) --
+                             #   VERIFY with the actual end-effector/camera mounted.
+  arm_reach_margin: 0.10     # stay this far inside max reach to avoid singular /
+                             #   edge-of-workspace configs [m] -- TUNE on hardware.
+  arm_base_xy_offset: 0.0    # forward offset of the UR5 base from the rover centre,
+                             #   along the base heading [m] -- CALIBRATE.
+
+structure:
+  z_min: 0.5                 # lowest part of the structure above ground [m] --
+                             #   START VALUE, calibrate by hand on site.
+  z_max: 2.5                 # highest part of the structure above ground [m] --
+                             #   START VALUE, calibrate by hand on site.
+
+orbit:
+  # The BASE orbit is a PREDEFINED geometric ring around an operator-given centre
+  # (the operator knows where the structure is). NO dependence on lidar.
+  center: [0.0, 0.0]         # structure centre in world/map XY [m] -- OPERATOR INPUT.
+  radius: 1.5                # ring radius around the centre [m]; keep within the
+                             #   camera's reliable depth band (1-2 m) -- CALIBRATE.
+  shape: circle              # ring shape: 'circle' | 'rounded_rect'.
+  rect_half_extents: [1.2, 0.8]  # rounded_rect only: half-extents X/Y [m] -- CALIBRATE.
+  rect_corner_radius: 0.4    # rounded_rect only: corner radius [m] -- CALIBRATE.
+  n_stations: 12             # base stations sampled along the ring -- TUNE (coverage
+                             #   vs scan time).
+  heading: to_center         # base heading rule: always face the structure centre.
+
+bands:
+  n_height_bands: 4          # vertical bands the structure z-range is split into; each
+                             #   band is framed by a different arm height/tilt. High
+                             #   bands may be UNREACHABLE -- TUNE vs arm envelope.
+  vertical_overlap: 0.15     # fraction of a band's height shared with each vertical
+                             #   neighbour, so adjacent captures overlap for fusion
+                             #   continuity (no seams between bands) -- TUNE.
+
+camera:                      # ZED 2i, 2.1mm lens, no polarizer, HD1080 (pinhole
+                             #   approx; nominal factory values, datasheet rev1).
+  width: 1920                #   -- real intrinsics: per-keyframe from session.json
+  height: 1080               #      (factory calib), these are mock/planning only.
+  fx: 1060.0                 # f 2.12mm / 2um pixel (HD1080 crop) ~ 84 deg HFOV
+  fy: 1060.0
+  cx: 960.0
+  cy: 540.0
+  z_near: 0.3                # raycast/clip near plane [m] (mock renderer).
+  z_far: 10.0                # raycast/clip far plane [m] (mock renderer).
+  depth_min: 0.3             # ZED 2i 2.1mm depth floor [m] (datasheet).
+  depth_max: 5.0             # reliable ceiling [m]: stereo error ~z^2, <1% @3m,
+                             #   <5% @15m (datasheet) -- CALIBRATE on real scans.
+  depth_degrade_max: 15.0    # datasheet accuracy bound; unusable beyond -- CALIBRATE.
+
+noise:                       # ZED 2i-like depth degradation, used ONLY by the mock
+                             #   renderer (no effect on the real driver).
+  axial_base: 0.0015         # sigma_z(z) = axial_base + axial_a * z^2  [m]
+  axial_a: 0.0008            # stereo: ~0.1px disparity err / (fx 1060 * baseline 0.12).
+  edge_grad_drop: 0.04       # drop pixels at depth steps > this [m] (occlusion edges).
+  grazing_cos_min: 0.2       # |ray.normal| below this is a grazing hit ...
+  grazing_drop_prob: 0.85    # ... dropped with this probability (specular / no return).
+  seed: 0
+
+adaptive:                    # Arm-level adaptivity at each station (the PATH stays
+                             #   fixed; only the arm adapts -- see CLAUDE.md design).
+  target_standoff: 1.2       # desired camera->structure distance [m], within
+                             #   depth_min..depth_max -- CALIBRATE.
+  standoff_tol: 0.3          # standoff deviation tolerated before correcting the
+                             #   approach/heading [m] -- TUNE.
+  approach_closer_for_high: true  # allow nudging the rover radially inward to bring
+                                  #   high bands within the depth-valid range.
+  max_approach_delta: 0.4    # max inward radial correction allowed [m] -- TUNE
+                             #   (must keep the base clear of the structure).
+  tilt_limit_deg: 35.0       # max camera tilt from horizontal when aiming high/low
+                             #   bands [deg] -- TUNE vs arm wrist limits.
+
+fusion:                      # End-of-orbit fusion of keyframes -> cloud (+ mesh).
+                             #   Mirrors the tuned values in cleaning.yaml; kept here
+                             #   so the on-board scan config is self-contained.
+  voxel: 0.008               # TSDF voxel length [m].
+  sdf_trunc_factor: 5.0      # truncation distance = voxel * this.
+  # campetella_sim_02 stores metric 16-bit depth in depth_mm/ and exact
+  # T_world_camera poses in frames.jsonl; no pose refinement is performed.
+  depth_trunc: 5.0           # reject depth beyond this distance [m].
 
 odometry:
-  depth_trunc: 6.0                    # ignore depth beyond this range [m]
-  depth_diff_max: 0.07                # RGB-D odometry max depth difference for correspondence [m]
-  loop_closure: true                  # try to register frame0<->frame_last for the pose graph
-  pose_graph_max_correspondence: 0.05  # global_optimization edge acceptance distance [m]
-  edge_prune_threshold: 0.25          # global_optimization: prune edges below this confidence
-
-fusion:
-  voxel: 0.008             # TSDF voxel length [m]
-  sdf_trunc_factor: 5.0    # truncation distance = voxel * this
-  depth_trunc: 6.0         # ignore depth beyond this range [m]
-  device: "CPU:0"          # Open3D device for TSDF integration: "CPU:0" or
-                            # "CUDA:0" (needs a CUDA-enabled Open3D build + GPU)
-  block_count: 100000      # initial voxel-block hash-map capacity; raise for
-                            # very large room-scale volumes
-
-# Post-fusion cloud/mesh cleanup, applied after TSDF extraction (ported from
-# the RENEE cleaning pipeline's cleaning/surface/meshing.py -- same filters,
-# same param names). All passes are opt-in (0 / false = skip) so existing
-# sessions/tests are unaffected until you turn one on.
-cleanup:
-  downsample_voxel: 0.0    # pre-filter voxel size [m]; 0 = skip.
-                            # ~0.005-0.008 m for real RGB-D scans.
-  sor_nb_neighbors: 0      # Statistical Outlier Removal: neighbours to inspect.
-                            # 20-30 is a good starting point for real data. 0 = skip.
-  sor_std_ratio: 2.0       # SOR threshold: drop points with mean-neighbour-dist
-                            # > global_mean + std_ratio * global_std. Lower = more
-                            # aggressive (1.5 for heavy noise, 2.5 for light touch).
-  ror_nb_neighbors: 0      # Radius Outlier Removal: min neighbours within radius.
-                            # Removes floating blobs SOR misses. 0 = skip.
-  ror_radius: 0.04         # ROR search radius [m]. ~2-4x downsample_voxel works well.
-  keep_largest_cluster: false  # DBSCAN: keep only the biggest connected cluster,
-                            # discard disconnected background/noise blobs. false = skip.
-                            # Good for an orbit scan around a single isolated object.
-  cluster_eps: 0.05        # DBSCAN neighbourhood radius [m].
-  cluster_min_pts: 10      # DBSCAN min points to form a cluster.
-  crop_margin: 0.03        # crop the TSDF mesh to the (filtered) cloud's bbox +
-                            # this margin [m], so it stays consistent with whatever
-                            # the filters above removed.
-  smooth_iter: 0           # Taubin mesh smoothing iterations after cleanup.
-                            # 5-10 removes surface roughness without shrinking. 0 = skip.
+  depth_trunc: 5.0
+  depth_diff_max: 0.07
+  min_depth_valid_fraction: 0.20
+  min_blur_variance: 40.0
+  pose_graph_max_correspondence: 0.05
+  edge_prune_threshold: 0.25
