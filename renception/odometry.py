@@ -23,6 +23,15 @@ from .contracts import Keyframe, ScanSession
 DEFAULT_DEPTH_DIFF_MAX = 0.07
 DEFAULT_MIN_DEPTH_FRACTION = 0.20
 DEFAULT_MIN_BLUR_VARIANCE = 40.0
+DEFAULT_LOOP_MIN_SEPARATION = 30
+DEFAULT_LOOP_CHECK_INTERVAL = 10
+DEFAULT_LOOP_SEARCH_RADIUS = 0.25
+DEFAULT_LOOP_MAX_EDGES = 20
+DEFAULT_ICP_VOXEL_SIZE = 0.02
+DEFAULT_ICP_MAX_CORRESPONDENCE_DISTANCE = 0.05
+DEFAULT_ICP_MAX_ITERATIONS = 30
+DEFAULT_ICP_MIN_FITNESS = 0.20
+DEFAULT_ICP_MIN_POINTS = 100
 DEFAULT_POSE_GRAPH_DISTANCE = 0.05
 DEFAULT_EDGE_PRUNE_THRESHOLD = 0.25
 
@@ -114,20 +123,111 @@ def _camera_intrinsic(
     return session_io.keyframe_intrinsic(keyframe, width, height)
 
 
-def _pairwise_odometry(
+def _refine_with_icp(
     source: o3d.geometry.RGBDImage,
     target: o3d.geometry.RGBDImage,
     intrinsic: o3d.camera.PinholeCameraIntrinsic,
+    initial_transform: np.ndarray,
     config: Config,
-) -> tuple[bool, np.ndarray, np.ndarray]:
-    """Estimate the rigid transformation between two RGB-D frames.
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Refine an RGB-D transformation with point-to-plane ICP.
 
     Args:
         source (open3d.geometry.RGBDImage): Source RGB-D frame.
         target (open3d.geometry.RGBDImage): Target RGB-D frame.
         intrinsic (open3d.camera.PinholeCameraIntrinsic): Shared camera model.
-        config (dict[str, Any]): Mapping containing ``depth_diff_max`` and
-            ``depth_trunc`` in meters.
+        initial_transform (np.ndarray): Source-to-target ``float`` matrix with
+            shape ``(4, 4)``.
+        config (dict[str, Any]): Mapping containing ICP voxel size,
+            correspondence distance, iterations, and minimum fitness.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray] | None: Refined source-to-target
+            ``float64`` matrix with shape ``(4, 4)`` and information matrix
+            with shape ``(6, 6)``; ``None`` when refinement is unreliable.
+    """
+    voxel_size = float(config.get("icp_voxel_size", DEFAULT_ICP_VOXEL_SIZE))
+    max_distance = float(
+        config.get(
+            "icp_max_correspondence_distance",
+            DEFAULT_ICP_MAX_CORRESPONDENCE_DISTANCE,
+        )
+    )
+    max_iterations = int(
+        config.get("icp_max_iterations", DEFAULT_ICP_MAX_ITERATIONS)
+    )
+    min_fitness = float(
+        config.get("icp_min_fitness", DEFAULT_ICP_MIN_FITNESS)
+    )
+
+    source_cloud = o3d.geometry.PointCloud.create_from_rgbd_image(
+        source,
+        intrinsic,
+    )
+    target_cloud = o3d.geometry.PointCloud.create_from_rgbd_image(
+        target,
+        intrinsic,
+    )
+    if voxel_size > 0.0:
+        source_cloud = source_cloud.voxel_down_sample(voxel_size)
+        target_cloud = target_cloud.voxel_down_sample(voxel_size)
+
+    if (
+        len(source_cloud.points) < DEFAULT_ICP_MIN_POINTS
+        or len(target_cloud.points) < DEFAULT_ICP_MIN_POINTS
+    ):
+        return None
+
+    normal_radius = max(2.0 * voxel_size, max_distance)
+    normal_search = o3d.geometry.KDTreeSearchParamHybrid(
+        radius=normal_radius,
+        max_nn=30,
+    )
+    source_cloud.estimate_normals(normal_search)
+    target_cloud.estimate_normals(normal_search)
+
+    result = o3d.pipelines.registration.registration_icp(
+        source_cloud,
+        target_cloud,
+        max_distance,
+        np.asarray(initial_transform, dtype=float),
+        o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+        o3d.pipelines.registration.ICPConvergenceCriteria(
+            max_iteration=max_iterations,
+        ),
+    )
+    transform = np.asarray(result.transformation, dtype=float)
+    if result.fitness < min_fitness or not np.isfinite(transform).all():
+        return None
+
+    information = (
+        o3d.pipelines.registration.get_information_matrix_from_point_clouds(
+            source_cloud,
+            target_cloud,
+            max_distance,
+            transform,
+        )
+    )
+    return transform, np.asarray(information, dtype=float)
+
+
+def _pairwise_odometry(
+    source: o3d.geometry.RGBDImage,
+    target: o3d.geometry.RGBDImage,
+    intrinsic: o3d.camera.PinholeCameraIntrinsic,
+    config: Config,
+    initial_transform: np.ndarray | None = None,
+) -> tuple[bool, np.ndarray, np.ndarray]:
+    """Estimate and optionally refine a transformation between RGB-D frames.
+
+    Args:
+        source (open3d.geometry.RGBDImage): Source RGB-D frame.
+        target (open3d.geometry.RGBDImage): Target RGB-D frame.
+        intrinsic (open3d.camera.PinholeCameraIntrinsic): Shared camera model.
+        config (dict[str, Any]): Mapping containing RGB-D odometry limits and
+            optional ICP refinement parameters.
+        initial_transform (np.ndarray | None): Initial source-to-target
+            ``float`` matrix with shape ``(4, 4)``, or ``None`` for identity.
 
     Returns:
         tuple[bool, np.ndarray, np.ndarray]: Success flag, source-to-target
@@ -137,16 +237,31 @@ def _pairwise_odometry(
     option = o3d.pipelines.odometry.OdometryOption()
     option.depth_diff_max = float(config["depth_diff_max"])
     option.depth_max = float(config["depth_trunc"])
+    initial = (
+        np.eye(4)
+        if initial_transform is None
+        else np.asarray(initial_transform, dtype=float)
+    )
     success, transform, information = (
         o3d.pipelines.odometry.compute_rgbd_odometry(
             source,
             target,
             intrinsic,
-            np.eye(4),
+            initial,
             o3d.pipelines.odometry.RGBDOdometryJacobianFromHybridTerm(),
             option,
         )
     )
+    if success and config.get("icp_refinement", True):
+        refinement = _refine_with_icp(
+            source,
+            target,
+            intrinsic,
+            transform,
+            config,
+        )
+        if refinement is not None:
+            transform, information = refinement
     return success, transform, information
 
 
@@ -264,6 +379,79 @@ def estimate_poses(
             f"{len(keyframes) - 1} pairs "
             f"(frames {failed_frames[:5]}{suffix}); held pose constant"
         )
+
+    loop_edges = 0
+    loop_min_separation = int(
+        odometry_config.get(
+            "loop_min_separation",
+            DEFAULT_LOOP_MIN_SEPARATION,
+        )
+    )
+    loop_interval = max(
+        1,
+        int(
+            odometry_config.get(
+                "loop_check_interval",
+                DEFAULT_LOOP_CHECK_INTERVAL,
+            )
+        ),
+    )
+    loop_radius = float(
+        odometry_config.get("loop_search_radius", DEFAULT_LOOP_SEARCH_RADIUS)
+    )
+    loop_max_edges = int(
+        odometry_config.get("loop_max_edges", DEFAULT_LOOP_MAX_EDGES)
+    )
+
+    if (
+        odometry_config.get("loop_closure", True)
+        and len(keyframes) > loop_min_separation
+    ):
+        positions = np.asarray(
+            [node.pose[:3, 3] for node in pose_graph.nodes]
+        )
+        for target_index in range(
+            loop_min_separation,
+            len(keyframes),
+            loop_interval,
+        ):
+            if loop_edges >= loop_max_edges:
+                break
+
+            eligible = positions[: target_index - loop_min_separation + 1]
+            distances = np.linalg.norm(
+                eligible - positions[target_index],
+                axis=1,
+            )
+            source_index = int(np.argmin(distances))
+            if distances[source_index] > loop_radius:
+                continue
+
+            initial_transform = (
+                np.linalg.inv(pose_graph.nodes[target_index].pose)
+                @ pose_graph.nodes[source_index].pose
+            )
+            success, transform, information = _pairwise_odometry(
+                rgbd_frames[source_index],
+                rgbd_frames[target_index],
+                intrinsic,
+                odometry_config,
+                initial_transform=initial_transform,
+            )
+            if success and np.isfinite(transform).all():
+                pose_graph.edges.append(
+                    o3d.pipelines.registration.PoseGraphEdge(
+                        source_index,
+                        target_index,
+                        transform,
+                        information,
+                        uncertain=True,
+                    )
+                )
+                loop_edges += 1
+
+    if loop_edges:
+        print(f"added {loop_edges} loop-closure edges")
 
     return _optimized_poses(pose_graph, odometry_config)
 

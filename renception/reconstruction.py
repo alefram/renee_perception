@@ -8,7 +8,6 @@ estimation and TSDF integration.
 
 from __future__ import annotations
 
-import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -17,12 +16,12 @@ import numpy as np
 import open3d as o3d
 
 from . import io as session_io
+from . import fusion
 from . import odometry
 from .contracts import ScanSession
 
 
 DEFAULT_CAPTURE_FPS = 30.0
-DEFAULT_BLOCK_COUNT = 5000
 
 Config = dict[str, Any]
 PoseList = list[np.ndarray]
@@ -126,38 +125,6 @@ def _session_has_poses(session: ScanSession, session_file: Path) -> bool:
     return bool(pose_flags) and all(pose_flags)
 
 
-def _offline_config(config: Config) -> Config:
-    """Complete the reconstruction configuration with offline defaults.
-
-    Args:
-        config (dict[str, Any]): Nested mapping with ``fusion``, optional
-            ``odometry``, and optional ``cleanup`` mappings.
-
-    Returns:
-        dict[str, Any]: Deep-copied configuration with default values filled.
-    """
-    result = copy.deepcopy(config)
-    fusion_config = result["fusion"]
-    fusion_config.setdefault("device", "CPU:0")
-    fusion_config.setdefault("block_count", DEFAULT_BLOCK_COUNT)
-
-    defaults = {
-        "depth_trunc": fusion_config["depth_trunc"],
-        "depth_diff_max": odometry.DEFAULT_DEPTH_DIFF_MAX,
-        "min_depth_valid_fraction": odometry.DEFAULT_MIN_DEPTH_FRACTION,
-        "min_blur_variance": odometry.DEFAULT_MIN_BLUR_VARIANCE,
-        "pose_graph_max_correspondence": (
-            odometry.DEFAULT_POSE_GRAPH_DISTANCE
-        ),
-        "edge_prune_threshold": odometry.DEFAULT_EDGE_PRUNE_THRESHOLD,
-    }
-    odometry_config = result.setdefault("odometry", {})
-    for name, value in defaults.items():
-        odometry_config.setdefault(name, value)
-    result.setdefault("cleanup", {})
-    return result
-
-
 def _load_dataset(
     root: Path,
     intrinsics_path: str | Path | None,
@@ -235,69 +202,6 @@ def _poses_from_session(session: ScanSession) -> PoseList:
     return poses
 
 
-def _fuse_legacy(
-    root: Path,
-    session: ScanSession,
-    poses: PoseList,
-    config: Config,
-) -> o3d.geometry.PointCloud:
-    """Fuse registered keyframes with Open3D's classic TSDF volume.
-
-    Args:
-        root (Path): Absolute base path for RGB-D image files.
-        session (ScanSession): Session with ``N`` ordered keyframes.
-        poses (list[np.ndarray]): ``N`` camera-to-world ``float`` matrices,
-            each with shape ``(4, 4)`` and translation in meters.
-        config (dict[str, Any]): Nested mapping containing ``fusion`` values.
-
-    Returns:
-        open3d.geometry.PointCloud: Fused point cloud with XYZ points in meters.
-
-    Raises:
-        ValueError: If pose and keyframe counts differ or fusion produces an
-            empty point cloud.
-    """
-    if len(poses) != len(session.keyframes):
-        raise ValueError(
-            f"{len(poses)} poses for {len(session.keyframes)} keyframes"
-        )
-
-    fusion_config = config["fusion"]
-    voxel_size = float(fusion_config["voxel"])
-    volume = o3d.pipelines.integration.ScalableTSDFVolume(
-        voxel_length=voxel_size,
-        sdf_trunc=voxel_size * float(fusion_config["sdf_trunc_factor"]),
-        color_type=(
-            o3d.pipelines.integration.TSDFVolumeColorType.RGB8
-        ),
-    )
-
-    for keyframe, pose in zip(session.keyframes, poses):
-        color = session_io.load_rgb(root, keyframe)
-        depth = session_io.load_depth(root, keyframe)
-        height, width = np.asarray(depth).shape[:2]
-        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
-            color,
-            depth,
-            depth_scale=1000.0,
-            depth_trunc=float(fusion_config["depth_trunc"]),
-            convert_rgb_to_intensity=False,
-        )
-        intrinsic = session_io.keyframe_intrinsic(
-            keyframe,
-            width,
-            height,
-        )
-        volume.integrate(rgbd, intrinsic, np.linalg.inv(pose))
-
-    cloud = volume.extract_point_cloud()
-    if len(cloud.points) == 0:
-        raise ValueError(
-            "TSDF fusion produced an empty cloud; check depth and poses"
-        )
-    return cloud
-
-
 def reconstruct_dataset(
     dataset_dir: str | Path,
     config: Config,
@@ -329,7 +233,6 @@ def reconstruct_dataset(
     root = Path(dataset_dir).resolve()
     session_file = root / "session.json"
     report_file = root / "registration_report.json"
-    reconstruction_config = _offline_config(config)
     session, has_poses = _load_dataset(root, intrinsics_path)
 
     if has_poses:
@@ -342,7 +245,7 @@ def reconstruct_dataset(
         session, poses, report = odometry.estimate_poses_validated(
             session,
             root,
-            reconstruction_config,
+            config,
         )
         print(
             f"accepted {len(poses)}/{report['input_frames']} camera poses"
@@ -361,19 +264,23 @@ def reconstruct_dataset(
         return None
 
     print("fusing accepted keyframes into TSDF...")
-    cloud = _fuse_legacy(root, session, poses, reconstruction_config)
+    cloud, mesh = fusion.fuse_session(session, root, config, poses)
     output = (
         Path(output_path)
         if output_path is not None
         else root / "fused_cloud.ply"
     )
     output.parent.mkdir(parents=True, exist_ok=True)
-    if not o3d.io.write_point_cloud(str(output), cloud):
-        raise OSError(f"could not write point cloud: {output}")
-
     try:
-        session.cloud_path = output.resolve().relative_to(root).as_posix()
+        cloud_path = output.resolve().relative_to(root).as_posix()
     except ValueError:
-        session.cloud_path = str(output.resolve())
-    session.save(session_file)
+        cloud_path = str(output.resolve())
+    session_io.write_fused(
+        root,
+        session_file,
+        session,
+        cloud,
+        mesh,
+        cloud_rel=cloud_path,
+    )
     return cloud

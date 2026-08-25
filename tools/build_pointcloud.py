@@ -87,16 +87,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Estimate and save the trajectory without TSDF fusion",
     )
-    parser.add_argument(
-        "--voxel",
-        type=float,
-        help="Override fusion voxel size in metres",
-    )
-    parser.add_argument(
-        "--depth-trunc",
-        type=float,
-        help="Override odometry/fusion maximum depth in metres",
-    )
     return parser
 
 
@@ -117,12 +107,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_path = args.out or (args.dataset.resolve() / "fused_cloud.ply")
     try:
         config = load_config(args.config)
-        if args.voxel is not None:
-            config["fusion"]["voxel"] = args.voxel
-        if args.depth_trunc is not None:
-            config["fusion"]["depth_trunc"] = args.depth_trunc
-            config.setdefault("odometry", {})["depth_trunc"] = args.depth_trunc
-
         cloud = build_pointcloud(
             args.dataset,
             output_path,

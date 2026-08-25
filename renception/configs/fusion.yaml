@@ -15,92 +15,96 @@
 #   - Arm: UR5, reach ~0.85 m from its base.
 
 robot:
-  base_mount_z: 0.55         # UR5 base mount height above ground on the Vogui+ [m]
-                             #   -- CALIBRATE (measure on the real robot).
-  arm_reach: 0.85            # UR5 max reach from its base [m] (datasheet) --
-                             #   VERIFY with the actual end-effector/camera mounted.
-  arm_reach_margin: 0.10     # stay this far inside max reach to avoid singular /
-                             #   edge-of-workspace configs [m] -- TUNE on hardware.
-  arm_base_xy_offset: 0.0    # forward offset of the UR5 base from the rover centre,
-                             #   along the base heading [m] -- CALIBRATE.
+  base_mount_z: 0.55         # UR5 base height above the ground [m].
+  arm_reach: 0.85            # Maximum usable arm reach from its base [m].
+  arm_reach_margin: 0.10     # Safety distance subtracted from maximum arm reach [m].
+  arm_base_xy_offset: 0.0    # Forward XY offset from rover centre to arm base [m].
 
 structure:
-  z_min: 0.5                 # lowest part of the structure above ground [m] --
-                             #   START VALUE, calibrate by hand on site.
-  z_max: 2.5                 # highest part of the structure above ground [m] --
-                             #   START VALUE, calibrate by hand on site.
+  z_min: 0.5                 # Lowest structure height above the ground [m].
+  z_max: 2.5                 # Highest structure height above the ground [m].
 
 orbit:
   # The BASE orbit is a PREDEFINED geometric ring around an operator-given centre
   # (the operator knows where the structure is). NO dependence on lidar.
-  center: [0.0, 0.0]         # structure centre in world/map XY [m] -- OPERATOR INPUT.
-  radius: 1.5                # ring radius around the centre [m]; keep within the
-                             #   camera's reliable depth band (1-2 m) -- CALIBRATE.
-  shape: circle              # ring shape: 'circle' | 'rounded_rect'.
-  rect_half_extents: [1.2, 0.8]  # rounded_rect only: half-extents X/Y [m] -- CALIBRATE.
-  rect_corner_radius: 0.4    # rounded_rect only: corner radius [m] -- CALIBRATE.
-  n_stations: 12             # base stations sampled along the ring -- TUNE (coverage
-                             #   vs scan time).
-  heading: to_center         # base heading rule: always face the structure centre.
+  center: [0.0, 0.0]         # Structure centre in world/map XY coordinates [m].
+  radius: 1.5                # Distance from the orbit path to its centre [m].
+  shape: circle              # Orbit geometry: circle or rounded_rect.
+  rect_half_extents: [1.2, 0.8]  # Rounded-rectangle half-size along X and Y [m].
+  rect_corner_radius: 0.4    # Rounded-rectangle corner radius [m].
+  n_stations: 12             # Number of base capture positions along the orbit.
+  heading: to_center         # Base orientation rule used at every station.
 
 bands:
-  n_height_bands: 4          # vertical bands the structure z-range is split into; each
-                             #   band is framed by a different arm height/tilt. High
-                             #   bands may be UNREACHABLE -- TUNE vs arm envelope.
-  vertical_overlap: 0.15     # fraction of a band's height shared with each vertical
-                             #   neighbour, so adjacent captures overlap for fusion
-                             #   continuity (no seams between bands) -- TUNE.
+  n_height_bands: 4          # Number of vertical capture bands across the structure.
+  vertical_overlap: 0.15     # Fractional overlap between adjacent height bands.
 
-camera:                      # ZED 2i, 2.1mm lens, no polarizer, HD1080 (pinhole
-                             #   approx; nominal factory values, datasheet rev1).
-  width: 1920                #   -- real intrinsics: per-keyframe from session.json
-  height: 1080               #      (factory calib), these are mock/planning only.
-  fx: 1060.0                 # f 2.12mm / 2um pixel (HD1080 crop) ~ 84 deg HFOV
-  fy: 1060.0
-  cx: 960.0
-  cy: 540.0
-  z_near: 0.3                # raycast/clip near plane [m] (mock renderer).
-  z_far: 10.0                # raycast/clip far plane [m] (mock renderer).
-  depth_min: 0.3             # ZED 2i 2.1mm depth floor [m] (datasheet).
-  depth_max: 5.0             # reliable ceiling [m]: stereo error ~z^2, <1% @3m,
-                             #   <5% @15m (datasheet) -- CALIBRATE on real scans.
-  depth_degrade_max: 15.0    # datasheet accuracy bound; unusable beyond -- CALIBRATE.
+camera:                      # Nominal camera parameters used by planning and simulation.
+  width: 1920                # Color and depth image width [pixels].
+  height: 1080               # Color and depth image height [pixels].
+  fx: 1060.0                 # Horizontal focal length [pixels].
+  fy: 1060.0                 # Vertical focal length [pixels].
+  cx: 960.0                  # Principal-point horizontal coordinate [pixels].
+  cy: 540.0                  # Principal-point vertical coordinate [pixels].
+  z_near: 0.3                # Near clipping plane used by the mock renderer [m].
+  z_far: 10.0                # Far clipping plane used by the mock renderer [m].
+  depth_min: 0.3             # Minimum reliable camera depth [m].
+  depth_max: 5.0             # Maximum depth considered reliable [m].
+  depth_degrade_max: 15.0    # Distance where simulated depth becomes unusable [m].
 
-noise:                       # ZED 2i-like depth degradation, used ONLY by the mock
-                             #   renderer (no effect on the real driver).
-  axial_base: 0.0015         # sigma_z(z) = axial_base + axial_a * z^2  [m]
-  axial_a: 0.0008            # stereo: ~0.1px disparity err / (fx 1060 * baseline 0.12).
-  edge_grad_drop: 0.04       # drop pixels at depth steps > this [m] (occlusion edges).
-  grazing_cos_min: 0.2       # |ray.normal| below this is a grazing hit ...
-  grazing_drop_prob: 0.85    # ... dropped with this probability (specular / no return).
-  seed: 0
+noise:                       # Simulated depth noise; it does not affect the real driver.
+  axial_base: 0.0015         # Constant component of axial depth noise [m].
+  axial_a: 0.0008            # Quadratic distance coefficient of axial depth noise [1/m].
+  edge_grad_drop: 0.04       # Depth discontinuity that causes simulated pixel dropout [m].
+  grazing_cos_min: 0.2       # Minimum ray-normal cosine accepted as a stable hit.
+  grazing_drop_prob: 0.85    # Dropout probability assigned to grazing-angle hits.
+  seed: 0                    # Random seed used by simulated sensor noise.
 
-adaptive:                    # Arm-level adaptivity at each station (the PATH stays
-                             #   fixed; only the arm adapts -- see CLAUDE.md design).
-  target_standoff: 1.2       # desired camera->structure distance [m], within
-                             #   depth_min..depth_max -- CALIBRATE.
-  standoff_tol: 0.3          # standoff deviation tolerated before correcting the
-                             #   approach/heading [m] -- TUNE.
-  approach_closer_for_high: true  # allow nudging the rover radially inward to bring
-                                  #   high bands within the depth-valid range.
-  max_approach_delta: 0.4    # max inward radial correction allowed [m] -- TUNE
-                             #   (must keep the base clear of the structure).
-  tilt_limit_deg: 35.0       # max camera tilt from horizontal when aiming high/low
-                             #   bands [deg] -- TUNE vs arm wrist limits.
+adaptive:                    # Arm-level camera-position adaptation at each station.
+  target_standoff: 1.2       # Desired distance from camera to structure [m].
+  standoff_tol: 0.3          # Allowed distance error before correcting the pose [m].
+  approach_closer_for_high: true  # Allow inward motion to observe high structure bands.
+  max_approach_delta: 0.4    # Maximum inward correction from the planned orbit [m].
+  tilt_limit_deg: 35.0       # Maximum camera tilt from horizontal [degrees].
 
-fusion:                      # End-of-orbit fusion of keyframes -> cloud (+ mesh).
-                             #   Mirrors the tuned values in cleaning.yaml; kept here
-                             #   so the on-board scan config is self-contained.
-  voxel: 0.008               # TSDF voxel length [m].
-  sdf_trunc_factor: 5.0      # truncation distance = voxel * this.
-  # campetella_sim_02 stores metric 16-bit depth in depth_mm/ and exact
-  # T_world_camera poses in frames.jsonl; no pose refinement is performed.
-  depth_trunc: 5.0           # reject depth beyond this distance [m].
+fusion:                      # Sparse TSDF integration and geometry extraction.
+  voxel: 0.006               # Edge length of each TSDF voxel [m].
+  sdf_trunc_factor: 5.0      # TSDF truncation distance expressed in voxel units.
+  depth_scale: 1000.0        # Number of stored depth units per metre.
+  device: "CPU:0"            # Open3D computation device, such as CPU:0 or CUDA:0.
+  block_resolution: 16       # Number of voxels along each sparse block edge.
+  block_count: 5000          # Maximum number of sparse TSDF blocks allocated.
+  depth_trunc: 3.0           # Maximum depth integrated into the TSDF [m].
 
 odometry:
-  depth_trunc: 5.0
-  depth_diff_max: 0.07
-  min_depth_valid_fraction: 0.20
-  min_blur_variance: 40.0
-  pose_graph_max_correspondence: 0.05
-  edge_prune_threshold: 0.25
+  depth_trunc: 3.0           # Maximum depth used by RGB-D odometry [m].
+  depth_diff_max: 0.04       # Maximum depth difference accepted for correspondence [m].
+  min_depth_valid_fraction: 0.20  # Minimum fraction of nonzero depth pixels per frame.
+  min_blur_variance: 60.0    # Minimum Laplacian variance required for image sharpness.
+
+  loop_closure: true         # Enable registration between nonconsecutive revisited frames.
+  loop_min_separation: 25    # Minimum frame-index separation for a loop candidate.
+  loop_check_interval: 5     # Number of frames between loop-candidate searches.
+  loop_search_radius: 0.20   # Maximum pose distance for a loop candidate [m].
+  loop_max_edges: 30         # Maximum loop-closure edges added to the pose graph.
+
+  icp_refinement: true       # Enable point-to-plane ICP after RGB-D odometry.
+  icp_voxel_size: 0.012      # Voxel size used to downsample ICP point clouds [m].
+  icp_max_correspondence_distance: 0.02  # Maximum ICP point-pair distance [m].
+  icp_max_iterations: 50     # Maximum optimization iterations for each ICP call.
+  icp_min_fitness: 0.30      # Minimum correspondence ratio required to accept ICP.
+
+  pose_graph_max_correspondence: 0.05  # Correspondence distance used in graph optimization [m].
+  edge_prune_threshold: 0.25 # Confidence threshold used to prune uncertain graph edges.
+
+cleanup:
+  downsample_voxel: 0.008    # Final cloud voxel size; zero disables downsampling [m].
+  sor_nb_neighbors: 30       # Neighbours used by statistical outlier removal.
+  sor_std_ratio: 2.0         # Standard-deviation multiplier accepted by SOR.
+  ror_nb_neighbors: 8        # Minimum neighbours required by radius filtering.
+  ror_radius: 0.04           # Neighbourhood radius used by ROR [m].
+  keep_largest_cluster: true # Keep only the largest DBSCAN-connected component.
+  cluster_eps: 0.05          # Maximum DBSCAN neighbour distance [m].
+  cluster_min_pts: 15        # Minimum DBSCAN neighbours required for a core point.
+  crop_margin: 0.02          # Margin around the cloud bounding box used to crop mesh [m].
+  smooth_iter: 5             # Taubin mesh-smoothing iterations; zero disables smoothing.
