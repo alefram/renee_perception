@@ -20,6 +20,11 @@ include = ["renception*"]
 [tool.setuptools.package-data]
 renception = ["configs/*.yaml"]
 
+[tool.pylint.typecheck]
+# pyrealsense2 is a native extension whose runtime members are not visible to
+# Pylint's static analyser.
+ignored-modules = ["pyrealsense2"]
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
