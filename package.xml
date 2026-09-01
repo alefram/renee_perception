@@ -3,13 +3,12 @@
 <package format="3">
   <name>renee_perception</name>
   <version>0.1.0</version>
-  <description>RENEE perception: camera capture action server plus offline RGB-D capture -> registered point cloud / mesh tooling.</description>
+  <description>RENEE perception libraries and offline RGB-D reconstruction tooling.</description>
   <maintainer email="fraumalex@gmail.com">Alexis</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
-  <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
@@ -19,19 +18,9 @@
   <depend>builtin_interfaces</depend>
   <depend>cv_bridge</depend>
   <depend>geometry_msgs</depend>
-  <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
-  <depend>std_srvs</depend>
-  <depend>tf2</depend>
-  <depend>tf2_ros</depend>
 
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>rosidl_default_runtime</exec_depend>
-  <exec_depend>launch</exec_depend>
-  <exec_depend>launch_ros</exec_depend>
-
-  <member_of_group>rosidl_interface_packages</member_of_group>
-
   <export>
     <build_type>ament_cmake</build_type>
   </export>
