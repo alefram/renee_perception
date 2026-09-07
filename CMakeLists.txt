@@ -38,11 +38,14 @@ install(DIRECTORY
   DESTINATION include
 )
 
+install(DIRECTORY launch config DESTINATION share/renee_perception)
+
 install(PROGRAMS
   tools/build_pointcloud.py
   tools/extract_video_frames.py
   tools/record_data.py
   tools/visualize.py
+  tools/rgbd_preview.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
