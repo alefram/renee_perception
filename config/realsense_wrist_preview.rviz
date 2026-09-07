@@ -37,7 +37,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Value: /robot/arm_rgbd_camera/aligned_depth_to_color/image_raw
+        Value: /robot/arm_rgbd_camera/depth/image_rect_raw
       Value: true
   Global Options:
     Fixed Frame: robot_arm_rgbd_camera_color_optical_frame

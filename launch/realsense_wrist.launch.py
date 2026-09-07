@@ -67,7 +67,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'rgb_topic': '/robot/arm_rgbd_camera/color/image_raw',
-            'depth_topic': '/robot/arm_rgbd_camera/aligned_depth_to_color/image_raw',
+            'depth_topic': '/robot/arm_rgbd_camera/depth/image_rect_raw',
             'camera_frame': 'robot_arm_rgbd_camera_color_optical_frame',
             'reference_frame': 'robot_base_link',
         }],

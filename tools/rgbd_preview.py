@@ -27,7 +27,7 @@ class RgbdPreview(Node):
     def __init__(self):
         super().__init__('rgbd_preview')
         self.rgb_topic = self.declare_parameter('rgb_topic', '/robot/arm_rgbd_camera/color/image_raw').value
-        self.depth_topic = self.declare_parameter('depth_topic', '/robot/arm_rgbd_camera/aligned_depth_to_color/image_raw').value
+        self.depth_topic = self.declare_parameter('depth_topic', '/robot/arm_rgbd_camera/depth/image_rect_raw').value
         self.camera_frame = self.declare_parameter('camera_frame', 'robot_arm_rgbd_camera_color_optical_frame').value
         self.reference_frame = self.declare_parameter('reference_frame', 'robot_base_link').value
         self.max_depth_m = float(self.declare_parameter('max_depth_m', 3.0).value)
