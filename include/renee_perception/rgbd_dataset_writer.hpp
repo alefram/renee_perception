@@ -12,6 +12,7 @@ public:
   RgbdDatasetWriter() = default;
 
   RgbdCaptureRecord writeCapture(const RgbdCaptureData & data) const;
+  std::string writeStationSummary(const RgbdStationSummary & summary) const;
 };
 
 }  // namespace renee_perception

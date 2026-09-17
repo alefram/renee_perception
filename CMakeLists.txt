@@ -6,6 +6,7 @@ find_package(ament_cmake_python REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(sensor_msgs REQUIRED)
 
@@ -23,6 +24,7 @@ ament_target_dependencies(rgbd_dataset_writer
   builtin_interfaces
   cv_bridge
   geometry_msgs
+  nav_msgs
   sensor_msgs
 )
 
@@ -51,7 +53,7 @@ install(PROGRAMS
 
 ament_export_include_directories(include)
 ament_export_libraries(rgbd_dataset_writer)
-ament_export_dependencies(builtin_interfaces cv_bridge geometry_msgs sensor_msgs)
+ament_export_dependencies(builtin_interfaces cv_bridge geometry_msgs nav_msgs sensor_msgs)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
