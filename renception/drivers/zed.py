@@ -8,7 +8,7 @@ means writing a new driver module with the same shape, not touching the
 scripts.
 """
 
-from __future__ import annotations
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pyzed.sl as sl
@@ -20,11 +20,12 @@ RESOLUTIONS = {
     "VGA": (sl.RESOLUTION.VGA, 672, 376),
 }
 
+# NEURAL depth mode requires ZED SDK >= 4.0 (and Tensor Core hardware); older
+# SDKs / Tegra X1-class boards simply don't have the sl.DEPTH_MODE member.
 DEPTH_MODES = {
-    "NEURAL": sl.DEPTH_MODE.NEURAL,
-    "ULTRA": sl.DEPTH_MODE.ULTRA,
-    "QUALITY": sl.DEPTH_MODE.QUALITY,
-    "PERFORMANCE": sl.DEPTH_MODE.PERFORMANCE,
+    name: getattr(sl.DEPTH_MODE, name)
+    for name in ("NEURAL", "ULTRA", "QUALITY", "PERFORMANCE")
+    if hasattr(sl.DEPTH_MODE, name)
 }
 
 
@@ -34,7 +35,7 @@ def closest_resolution_name(width: int, height: int) -> str:
     return min(RESOLUTIONS, key=lambda name: abs(RESOLUTIONS[name][1] * RESOLUTIONS[name][2] - target))
 
 
-def unpack_xyzrgba(xyzrgba: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def unpack_xyzrgba(xyzrgba: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """ZED XYZRGBA measure: Nx4 float32, column 3 packs 4 BGRA uint8 bytes into
     one float32. Returns (points Nx3, colors Nx3 in [0, 1])."""
     xyz = xyzrgba[:, :3].astype(np.float64)
@@ -46,7 +47,7 @@ def unpack_xyzrgba(xyzrgba: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return xyz, colors
 
 
-def _camera_params_to_matrix(params) -> tuple[np.ndarray, np.ndarray]:
+def _camera_params_to_matrix(params) -> Tuple[np.ndarray, np.ndarray]:
     """Build a 3x3 camera matrix and distortion vector from ZED calibration parameters"""
     camera_matrix = np.array([
         [params.fx, 0, params.cx],
@@ -66,9 +67,9 @@ class ZedCamera:
         self.zed = sl.Camera()
         self.runtime_params = sl.RuntimeParameters()
         self.runtime_params.enable_depth = True
-        self.width: int | None = None
-        self.height: int | None = None
-        self.fps: int | None = None
+        self.width: Optional[int] = None
+        self.height: Optional[int] = None
+        self.fps: Optional[int] = None
         self._image_mat = sl.Mat()
         self._depth_mat = sl.Mat()
         self._xyzrgba_mat = sl.Mat()
@@ -76,7 +77,7 @@ class ZedCamera:
 
     def open(self, resolution_name: str, fps: int, depth_mode: str = "NEURAL",
              depth_min: float = 0.3, depth_max: float = 20.0,
-             coordinate_system: str = "RIGHT_HANDED_Y_UP") -> tuple[bool, str]:
+             coordinate_system: str = "RIGHT_HANDED_Y_UP") -> Tuple[bool, str]:
         """Attempt to open the camera with the given resolution/fps. Returns
         (ok, status_str); sets self.width/height/fps on success.
 
@@ -104,20 +105,20 @@ class ZedCamera:
     def is_opened(self) -> bool:
         return self.zed.is_opened()
 
-    def get_intrinsics(self) -> tuple[np.ndarray, np.ndarray]:
+    def get_intrinsics(self) -> Tuple[np.ndarray, np.ndarray]:
         """Left/color camera (camera_matrix, dist_coeffs). Depth is computed
         on the rectified left image, so it shares these intrinsics."""
         camera_info = self.zed.get_camera_information()
         calibration = camera_info.camera_configuration.calibration_parameters
         return _camera_params_to_matrix(calibration.left_cam)
 
-    def grab(self) -> tuple[bool, str]:
+    def grab(self) -> Tuple[bool, str]:
         """Pull the next frame from the camera. Must be called before any
         retrieve_*()/get_pose() call. Returns (ok, status_str)."""
         status = self.zed.grab(self.runtime_params)
         return status == sl.ERROR_CODE.SUCCESS, str(status)
 
-    def retrieve_rgb_depth(self) -> tuple[np.ndarray, np.ndarray]:
+    def retrieve_rgb_depth(self) -> Tuple[np.ndarray, np.ndarray]:
         """(color_bgra, depth_m) from the last successful grab()."""
         self.zed.retrieve_image(self._image_mat, sl.VIEW.LEFT)
         self.zed.retrieve_measure(self._depth_mat, sl.MEASURE.DEPTH)
@@ -131,14 +132,14 @@ class ZedCamera:
         self.zed.retrieve_measure(self._xyzrgba_mat, sl.MEASURE.XYZRGBA)
         return self._xyzrgba_mat.get_data().reshape(-1, 4)
 
-    def enable_positional_tracking(self) -> tuple[bool, str]:
+    def enable_positional_tracking(self) -> Tuple[bool, str]:
         status = self.zed.enable_positional_tracking(sl.PositionalTrackingParameters())
         return status == sl.ERROR_CODE.SUCCESS, str(status)
 
     def disable_positional_tracking(self) -> None:
         self.zed.disable_positional_tracking()
 
-    def get_pose(self) -> tuple[np.ndarray, str, bool]:
+    def get_pose(self) -> Tuple[np.ndarray, str, bool]:
         """(T_world_cam, tracking_status_str, tracking_ok). A stale/bad pose
         (tracking_ok False) should not be trusted -- caller should skip the
         frame rather than stack it on the wrong spot."""
@@ -148,7 +149,7 @@ class ZedCamera:
         T[:3, 3] = np.array(self._pose.get_translation(sl.Translation()).get())
         return T, str(tracking_state), tracking_state == sl.POSITIONAL_TRACKING_STATE.OK
 
-    def list_devices(self) -> list[dict]:
+    def list_devices(self) -> List[dict]:
         return [
             {"model": d.camera_model, "serial_number": d.serial_number, "state": d.camera_state}
             for d in sl.Camera.get_device_list()

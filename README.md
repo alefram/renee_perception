@@ -25,6 +25,64 @@ python tools/visualize.py my_scan/extracted/session_x/session.json
 python tools/build_pointcloud.py my_scan/extracted/session_x              # -> fused_cloud.ply + session.json + registration_report.json
 ```
 
+## Running record_data.py on the Jetson (real ZED camera)
+
+The real ZED 3i is physically attached to the Jetson (`jetson-robotnik`), not
+the laptop, and is only reachable by jumping through the Vogui main board
+(see `vogui_ros1_ros2_bridge/docs/jetson_internet_access.md` for the SSH
+jump-host setup). Run the capture there:
+
+```bash
+ssh jetson
+cd ~/renee_perception
+python3 tools/record_data.py --camera zed --depth-mode QUALITY
+```
+
+Once a capture session finishes, pull the output back to your local checkout
+(`data/` is gitignored, so this is a plain file transfer, not a git
+operation). `rsync` is incremental, so it's safe to re-run after every
+session — it only copies what's new:
+
+```bash
+rsync -avz --progress jetson:~/renee_perception/data/ /path/to/renee_perception/data/
+```
+
+To grab a single session instead of everything:
+
+```bash
+scp -r jetson:~/renee_perception/data/zed_highres_<timestamp> /path/to/renee_perception/data/
+```
+
+## Real-hardware ZED capture from ROS2 (`/capture_zed_image`)
+
+The Jetson's JetPack/L4T version is too old to run ROS2 or the ZED SDK
+version `zed-ros2-wrapper` requires, so it stays ROS-free. Instead, the
+`renee_action_servers` package exposes a `CaptureZedImage` action
+(`zed_ssh_capture_action_server`, real robot + `wrist_camera:=stereolabs_zed2i`)
+that wraps the same ssh pattern used by `capture_aruco_pose.sh`:
+
+```bash
+ros2 action send_goal /capture_zed_image \
+    renee_action_servers/action/CaptureZedImage "{image_count: 10}" --feedback
+```
+
+Internally it runs, over SSH, the headless mode added to `record_data.py`
+for exactly this purpose (no `DISPLAY`/TTY required):
+
+```bash
+ssh jetson "cd ~/renee_perception && python3 tools/record_data.py \
+    --camera zed --headless --output ~/renee_perception/<session> \
+    --images-per-shot 10"
+```
+
+The dataset stays on the Jetson under `~/renee_perception/<session>`; the
+result's `output_dir` reports that path. Transfer it manually afterwards,
+e.g. `./sync_jetson.sh --pull` (the laptop's `data/` is synced from the
+Jetson's `data/`, so use a `session_dir` under `data/` for that). This is a
+single triggered snapshot, not continuous streaming — only one process can
+hold the ZED at a time, so it must not run while `record_data.py`/
+`zed_aruco_detect.py` are being used manually on the Jetson.
+
 ## Campetella continuous sweep
 
 Start the direct recorder with the RealSense backend (and do not run the ROS

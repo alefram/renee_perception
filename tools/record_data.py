@@ -26,8 +26,6 @@ Examples:
     python3 tools/record_data.py --camera realsense
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import sys
@@ -35,7 +33,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import cv2
 import numpy as np
@@ -51,7 +49,7 @@ from renception.contracts import Keyframe, ScanSession
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 720
 DEFAULT_FPS = 30
-DEFAULT_DEPTH_MODE = "NEURAL"
+DEFAULT_DEPTH_MODE = "QUALITY"
 DEFAULT_BURST_FPS = 2.0
 MIN_RECOMMENDED_SWEEP_FPS = 2.0
 DEFAULT_IMAGES_PER_SHOT = 30
@@ -81,12 +79,12 @@ class Frame:
 
     color_image: np.ndarray
     depth_m: np.ndarray
-    depth_raw_16: np.ndarray | None = None
-    depth_aligned_16: np.ndarray | None = None
-    infrared_left: np.ndarray | None = None
-    infrared_right: np.ndarray | None = None
-    timestamps: dict[str, Any] | None = None
-    imu_samples: list[dict[str, Any]] | None = None
+    depth_raw_16: Optional[np.ndarray] = None
+    depth_aligned_16: Optional[np.ndarray] = None
+    infrared_left: Optional[np.ndarray] = None
+    infrared_right: Optional[np.ndarray] = None
+    timestamps: Optional[Dict[str, Any]] = None
+    imu_samples: Optional[List[Dict[str, Any]]] = None
 
 
 @dataclass(frozen=True)
@@ -107,7 +105,7 @@ class CapturePaths:
     imu_file: Path
 
     @classmethod
-    def create(cls, camera_type: str, output_name: str | None) -> CapturePaths:
+    def create(cls, camera_type: str, output_name: Optional[str]) -> "CapturePaths":
         data_root = REPO_ROOT / "data"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -168,20 +166,20 @@ class RGBDHighResCapture:
         fps: int = DEFAULT_FPS,
         depth_mode: str = DEFAULT_DEPTH_MODE,
         camera_type: str = "zed",
-        serial_number: str | None = None,
+        serial_number: Optional[str] = None,
         save_aligned_depth: bool = True,
         enable_infrared: bool = True,
         enable_imu: bool = True,
         lock_capture_settings: bool = True,
-        exposure: float | None = None,
-        gain: float | None = None,
+        exposure: Optional[float] = None,
+        gain: Optional[float] = None,
     ) -> None:
         self.depth_mode_name = depth_mode
         self.camera_type = camera_type
         self.camera_label = "ZED" if camera_type == "zed" else "RealSense"
         self.save_aligned_depth = save_aligned_depth
-        self.paths: CapturePaths | None = None
-        self.session: ScanSession | None = None
+        self.paths: Optional[CapturePaths] = None
+        self.session: Optional[ScanSession] = None
 
         if camera_type == "zed":
             from renception.drivers.zed import ZedCamera
@@ -262,12 +260,20 @@ class RGBDHighResCapture:
 
         raise RuntimeError("Could not initialize camera with any supported resolution")
 
-    def _prepare_session(self) -> None:
-        """Create the output directories, intrinsics and session manifest."""
-        output_name = input(
-            "Enter output session name (or press Enter for an automatic name): "
-        ).strip()
-        self.paths = CapturePaths.create(self.camera_type, output_name or None)
+    def _prepare_session(self, output_name: Optional[str] = None) -> None:
+        """Create the output directories, intrinsics and session manifest.
+
+        ``output_name`` is used as-is when given (headless mode); otherwise
+        it is read interactively from stdin.
+        """
+        if output_name is None:
+            output_name = (
+                input(
+                    "Enter output session name (or press Enter for an automatic name): "
+                ).strip()
+                or None
+            )
+        self.paths = CapturePaths.create(self.camera_type, output_name)
         print(f"Created directories in: {self.paths.base}")
 
         if self.calibration is not None:
@@ -353,7 +359,7 @@ class RGBDHighResCapture:
         self.session.save(self.paths.session_file)
         print(f"Session manifest created: {self.paths.session_file}")
 
-    def _grab_frame(self) -> Frame | None:
+    def _grab_frame(self) -> Optional[Frame]:
         """Return the latest images, timestamps and optional sensor samples."""
         ok, _ = self.camera.grab()
         if not ok:
@@ -377,8 +383,8 @@ class RGBDHighResCapture:
             color_image=cv2.cvtColor(color, cv2.COLOR_BGRA2BGR),
             depth_m=depth_m,
             timestamps={
-                "host_unix_ns": time.time_ns(),
-                "host_monotonic_ns": time.monotonic_ns(),
+                "host_unix_ns": int(time.time() * 1e9),
+                "host_monotonic_ns": int(time.monotonic() * 1e9),
             },
         )
 
@@ -394,13 +400,24 @@ class RGBDHighResCapture:
         ).astype(np.uint16)
         return depth_mm
 
+    @staticmethod
+    def _centre_depth_text(depth_m: np.ndarray) -> str:
+        """Describe the depth at the image centre pixel."""
+        height, width = depth_m.shape
+        distance_m = depth_m[height // 2, width // 2]
+        return (
+            f"Centre: {distance_m:.2f} m"
+            if np.isfinite(distance_m) and distance_m > 0
+            else "Centre: invalid depth"
+        )
+
     def _show_frame(
         self,
         mode: str,
         color_image: np.ndarray,
         depth_m: np.ndarray,
         *,
-        status_text: str | None = None,
+        status_text: Optional[str] = None,
         show_distance: bool = True,
     ) -> int:
         """Display an RGB-D frame and return the pressed key."""
@@ -414,12 +431,7 @@ class RGBDHighResCapture:
         if show_distance:
             height, width = depth_m.shape
             center = (width // 2, height // 2)
-            distance_m = depth_m[center[1], center[0]]
-            depth_text = (
-                f"Centre: {distance_m:.2f} m"
-                if np.isfinite(distance_m) and distance_m > 0
-                else "Centre: invalid depth"
-            )
+            depth_text = self._centre_depth_text(depth_m)
             text_y = TEXT_ORIGIN[1]
             if status_text:
                 cv2.putText(
@@ -454,7 +466,7 @@ class RGBDHighResCapture:
         return cv2.waitKey(1) & 0xFF
 
     @staticmethod
-    def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
         with path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(payload, separators=(",", ":")))
             file.write("\n")
@@ -481,7 +493,7 @@ class RGBDHighResCapture:
         session = self.session
         frame_index = len(session.keyframes)
         timestamps = frame.timestamps or {}
-        host_unix_ns = timestamps.get("host_unix_ns") or time.time_ns()
+        host_unix_ns = timestamps.get("host_unix_ns") or int(time.time() * 1e9)
         capture_timestamp = host_unix_ns / 1_000_000_000.0
         filename_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         stem = f"frame_{frame_index:06d}"
@@ -653,6 +665,34 @@ class RGBDHighResCapture:
 
         print(f"Image capture session complete: {total_saved} image pairs saved")
         print("Resuming live preview...")
+
+    def capture_headless(
+        self, output: Optional[str], images_per_shot: int, timeout: float
+    ) -> int:
+        """Capture ``images_per_shot`` image pairs with no interactive I/O.
+
+        Meant to be triggered over a non-interactive SSH session (no
+        ``DISPLAY``, no TTY for ``input()``), e.g. from an action server
+        that shells out to this script on the Jetson.
+        """
+        self._prepare_session(output)
+        saved_count = 0
+        deadline = time.monotonic() + timeout
+        for image_index in range(images_per_shot):
+            frame = None
+            while frame is None:
+                if time.monotonic() > deadline:
+                    raise RuntimeError(
+                        f"Timed out waiting for frame {image_index + 1}/{images_per_shot}"
+                    )
+                frame = self._grab_frame()
+            if self._save_image_pair(frame):
+                saved_count += 1
+            print(f"  {self._centre_depth_text(frame.depth_m)}", flush=True)
+            deadline = time.monotonic() + timeout
+
+        print(f"HEADLESS_CAPTURE_DONE: {self.paths.base} images={saved_count}")
+        return saved_count
 
     def capture_burst(self) -> None:
         """Configure and run burst capture from the live preview."""
@@ -842,10 +882,15 @@ class RGBDHighResCapture:
         finally:
             cv2.destroyAllWindows()
 
-    def cleanup(self) -> None:
-        """Close the camera and all OpenCV windows."""
+    def cleanup(self, headless: bool = False) -> None:
+        """Close the camera and, unless running headless, all OpenCV windows.
+
+        Skipping ``destroyAllWindows()`` in headless mode avoids touching a
+        display backend on a machine with no ``DISPLAY`` (e.g. over SSH).
+        """
         self.camera.close()
-        cv2.destroyAllWindows()
+        if not headless:
+            cv2.destroyAllWindows()
         print("Camera resources cleaned up")
 
 
@@ -923,12 +968,43 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=None,
         help="Fixed depth/IR sensor gain to lock (skip auto-settle); RealSense only",
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help=(
+            "Skip the interactive preview; capture --images-per-shot images "
+            "once and exit. For non-interactive SSH-triggered capture "
+            "(no DISPLAY, no TTY)."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        help=(
+            "Output directory name/path for --headless mode (default: an "
+            "automatic timestamped name, same as pressing Enter interactively)"
+        ),
+    )
+    parser.add_argument(
+        "--images-per-shot",
+        type=positive_int,
+        default=DEFAULT_IMAGES_PER_SHOT,
+        help=(
+            "--headless mode: number of image pairs to capture "
+            f"(default: {DEFAULT_IMAGES_PER_SHOT})"
+        ),
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="--headless mode: seconds to wait for each frame before aborting (default: 30.0)",
+    )
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_argument_parser().parse_args(argv)
-    capture: RGBDHighResCapture | None = None
+    capture: Optional[RGBDHighResCapture] = None
 
     try:
         capture = RGBDHighResCapture(
@@ -945,7 +1021,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             exposure=args.exposure,
             gain=args.gain,
         )
-        capture.live_preview()
+        if args.headless:
+            capture.capture_headless(args.output, args.images_per_shot, args.timeout)
+        else:
+            capture.live_preview()
     except (RuntimeError, OSError, ValueError, cv2.error) as error:
         print(f"Error: {error}")
         print(
@@ -955,7 +1034,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     finally:
         if capture is not None:
-            capture.cleanup()
+            capture.cleanup(headless=args.headless)
 
     return 0
 

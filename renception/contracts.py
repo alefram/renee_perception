@@ -9,38 +9,36 @@ Serialization policy:
     images are likewise referenced by path.
 """
 
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, List, Optional, Union
 
 import numpy as np
 
 __all__ = ["Keyframe", "ScanSession"]
 
 
-def _arr_to_list(a: np.ndarray | None) -> list | None:
+def _arr_to_list(a: Optional[np.ndarray]) -> Optional[list]:
     if a is None:
         return None
     return np.asarray(a, dtype=float).tolist()
 
 
-def _list_to_arr(x: Any, dtype: type = float) -> np.ndarray | None:
+def _list_to_arr(x: Any, dtype: type = float) -> Optional[np.ndarray]:
     if x is None:
         return None
     return np.asarray(x, dtype=dtype)
 
 
-def _write_json(path: str | Path, payload: dict) -> None:
+def _write_json(path: Union[str, Path], payload: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
 
 
-def _read_json(path: str | Path) -> dict:
+def _read_json(path: Union[str, Path]) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -58,7 +56,7 @@ class Keyframe:
     intrinsics: np.ndarray  # 3x3 pinhole camera matrix
     station_id: int = 0
     timestamp: float = 0.0
-    T_world_cam: np.ndarray | None = None  # 4x4 camera pose in world frame
+    T_world_cam: Optional[np.ndarray] = None  # 4x4 camera pose in world frame
 
     def to_dict(self) -> dict:
         return {
@@ -87,9 +85,9 @@ class ScanSession:
     """A set of registered (or not-yet-registered) RGB-D keyframes."""
 
     session_dir: str
-    keyframes: list[Keyframe]
-    cloud_path: str | None = None  # fused point cloud (.ply), set after fusion
-    mesh_path: str | None = None  # extracted mesh (.ply), set after fusion
+    keyframes: List[Keyframe]
+    cloud_path: Optional[str] = None  # fused point cloud (.ply), set after fusion
+    mesh_path: Optional[str] = None  # extracted mesh (.ply), set after fusion
     meta: dict = field(default_factory=dict)  # date, camera, capture settings, ...
 
     def to_dict(self) -> dict:
@@ -111,9 +109,9 @@ class ScanSession:
             meta=d.get("meta", {}),
         )
 
-    def save(self, path: str | Path) -> None:
+    def save(self, path: Union[str, Path]) -> None:
         _write_json(path, self.to_dict())
 
     @classmethod
-    def load(cls, path: str | Path) -> "ScanSession":
+    def load(cls, path: Union[str, Path]) -> "ScanSession":
         return cls.from_dict(_read_json(path))
