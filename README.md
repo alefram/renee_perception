@@ -30,7 +30,9 @@ python tools/build_pointcloud.py my_scan/extracted/session_x              # -> f
 The real ZED 3i is physically attached to the Jetson (`jetson-robotnik`), not
 the laptop, and is only reachable by jumping through the Vogui main board
 (see `vogui_ros1_ros2_bridge/docs/jetson_internet_access.md` for the SSH
-jump-host setup). Run the capture there:
+jump-host setup). Before recording, lock the Jetson's clocks at maximum
+(`sudo jetson_clocks`; see [docs/jetson_performance.md](docs/jetson_performance.md)).
+Run the capture there:
 
 ```bash
 ssh jetson

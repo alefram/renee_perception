@@ -9,8 +9,20 @@ Preview controls:
     default).
     ``q`` exits the current mode.
 
+Headless (no ``DISPLAY``, no TTY, e.g. over SSH): ``--headless`` captures
+``--images-per-shot`` image pairs and exits; ``--headless --video`` records
+the RGB video plus per-frame depth for ``--duration`` seconds, or until
+Ctrl+C / SIGTERM without it.
+
+Video mode saves every frame (RGB, depth) and, when the recording ends,
+builds ``rgb/rgb_video_<time>.mp4`` and ``depth/depth_video_<time>.mp4``
+(depth colormap) from the saved frames at the rate they were actually
+captured (from frames.jsonl), so the videos play back in real time even when
+saving limits the capture to a few frames per second (e.g. on the Jetson).
+``--make-video SESSION`` rebuilds them for an existing session.
+
 Output layout:
-    rgb/          RGB images or the RGB video.
+    rgb/          RGB images, and in video mode rgb_video_<time>.mp4.
     depth_raw_16/ Native RealSense Z16 depth PNGs (unaligned SDK units).
     depth_aligned_16/ Optional Z16 depth aligned to RGB.
     depth_mm/     Aligned 16-bit depth PNGs in millimetres.
@@ -24,10 +36,13 @@ Output layout:
 Examples:
     python3 tools/record_data.py
     python3 tools/record_data.py --camera realsense
+    python3 tools/record_data.py --headless --video --duration 60 --output sweep_1
+    python3 tools/record_data.py --make-video data/zed_highres_20260928_112333
 """
 
 import argparse
 import json
+import signal
 import sys
 import time
 from dataclasses import dataclass
@@ -260,13 +275,16 @@ class RGBDHighResCapture:
 
         raise RuntimeError("Could not initialize camera with any supported resolution")
 
-    def _prepare_session(self, output_name: Optional[str] = None) -> None:
+    def _prepare_session(
+        self, output_name: Optional[str] = None, interactive: bool = True
+    ) -> None:
         """Create the output directories, intrinsics and session manifest.
 
-        ``output_name`` is used as-is when given (headless mode); otherwise
-        it is read interactively from stdin.
+        ``output_name`` is used as-is when given; otherwise it is read
+        interactively from stdin, or (``interactive=False``, headless mode)
+        an automatic timestamped name is used.
         """
-        if output_name is None:
+        if output_name is None and interactive:
             output_name = (
                 input(
                     "Enter output session name (or press Enter for an automatic name): "
@@ -675,7 +693,7 @@ class RGBDHighResCapture:
         ``DISPLAY``, no TTY for ``input()``), e.g. from an action server
         that shells out to this script on the Jetson.
         """
-        self._prepare_session(output)
+        self._prepare_session(output, interactive=False)
         saved_count = 0
         deadline = time.monotonic() + timeout
         for image_index in range(images_per_shot):
@@ -768,7 +786,7 @@ class RGBDHighResCapture:
         print("Resuming live preview...")
 
     def record_video(self) -> None:
-        """Configure and record RGB video plus per-frame depth data."""
+        """Configure (interactively) and record RGB video plus per-frame depth data."""
         cv2.destroyAllWindows()
         self._prepare_session()
         try:
@@ -782,33 +800,64 @@ class RGBDHighResCapture:
         except ValueError as error:
             print(f"Invalid recording duration: {error}")
             return
+        self._record_video_loop(duration_seconds, headless=False)
+        print("Resuming live preview...")
 
+    def record_video_headless(
+        self, output: Optional[str], duration_seconds: Optional[float], timeout: float
+    ) -> int:
+        """Record RGB video plus per-frame depth with no interactive I/O.
+
+        Like capture_headless() (no ``DISPLAY``, no TTY): records for
+        ``duration_seconds``, or until Ctrl+C / SIGTERM when None. Aborts if
+        no frame arrives for ``timeout`` seconds.
+
+        Output:
+            int: the number of frames recorded.
+        """
+        self._prepare_session(output, interactive=False)
+        # SIGTERM (e.g. the process is stopped remotely) ends the recording
+        # like Ctrl+C, so the video file is closed properly.
+        previous = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
+        try:
+            frame_count = self._record_video_loop(
+                duration_seconds, headless=True, timeout=timeout
+            )
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+        print(f"HEADLESS_VIDEO_DONE: {self.paths.base} frames={frame_count}", flush=True)
+        return frame_count
+
+    def _record_video_loop(
+        self,
+        duration_seconds: Optional[float],
+        headless: bool,
+        timeout: Optional[float] = None,
+    ) -> int:
+        """Record into the current session until the duration, ``q`` or Ctrl+C.
+
+        With ``headless`` there is no preview window (and no ``q``); a
+        ``timeout`` (s) aborts when no frame arrives for that long.
+
+        Output:
+            int: the number of frames recorded.
+        """
         if self.paths is None:
             raise RuntimeError("A capture session has not been started")
         paths = self.paths
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        rgb_video_path = paths.rgb / f"rgb_video_{timestamp}.mp4"
-        fourcc = cv2.VideoWriter_fourcc(*VIDEO_CODEC)
-        rgb_writer = cv2.VideoWriter(
-            str(rgb_video_path),
-            fourcc,
-            self.camera.fps,
-            (self.camera.width, self.camera.height),
-        )
-        if not rgb_writer.isOpened():
-            rgb_writer.release()
-            raise RuntimeError(f"Could not open video writer: {rgb_video_path}")
 
         print("Recording high-resolution video...")
         print(f"  Resolution: {self.camera.width}x{self.camera.height}")
         print("  Raw depth data will be saved for each frame")
         if duration_seconds is None:
-            print("  Press q to stop")
+            print("  Press Ctrl+C to stop" if headless else "  Press q to stop")
         else:
             print(f"  Recording for {duration_seconds:g} seconds")
 
         frame_count = 0
         started_at = time.monotonic()
+        last_frame_at = started_at
         try:
             while (
                 duration_seconds is None
@@ -816,13 +865,17 @@ class RGBDHighResCapture:
             ):
                 frame = self._grab_frame()
                 if frame is None:
+                    if timeout is not None and time.monotonic() - last_frame_at > timeout:
+                        raise RuntimeError(
+                            f"No frame for {timeout:g} s after {frame_count} frames"
+                        )
                     continue
+                last_frame_at = time.monotonic()
 
                 self._save_image_pair(frame)
-                rgb_writer.write(frame.color_image)
                 frame_count += 1
 
-                if self._show_frame(
+                if not headless and self._show_frame(
                     "",
                     frame.color_image,
                     frame.depth_m,
@@ -831,22 +884,29 @@ class RGBDHighResCapture:
                     break
 
                 if frame_count % 30 == 0:
-                    print(f"Recorded {frame_count} frames (with raw depth data)...")
+                    print(
+                        f"Recorded {frame_count} frames (with raw depth data)...",
+                        flush=True,
+                    )
         except KeyboardInterrupt:
             print("\nRecording interrupted by user")
         finally:
-            rgb_writer.release()
-            cv2.destroyAllWindows()
+            if not headless:
+                cv2.destroyAllWindows()
 
         elapsed_seconds = time.monotonic() - started_at
+        rgb_video_path, depth_video_path, video_fps = write_session_videos(
+            paths.base, timestamp
+        )
         print("✓ High-resolution video saved:")
-        print(f"  RGB: {rgb_video_path}")
+        print(f"  RGB video: {rgb_video_path} ({video_fps:.2f} fps, the capture rate)")
+        print(f"  Depth video: {depth_video_path}")
         print(f"  Raw depth frames: {frame_count} .npy files in {paths.depth}")
         print(f"  Per-frame depth PNGs: {paths.depth_mm}")
         print(f"  Frames recorded: {frame_count}")
         print(f"  Duration: {elapsed_seconds:.2f} seconds")
         self._report_capture_rate(frame_count, elapsed_seconds)
-        print("Resuming live preview...")
+        return frame_count
 
     def live_preview(self) -> None:
         """Run the interactive RGB-D preview."""
@@ -892,6 +952,95 @@ class RGBDHighResCapture:
         if not headless:
             cv2.destroyAllWindows()
         print("Camera resources cleaned up")
+
+
+def write_session_videos(
+    base: Path, timestamp: Optional[str] = None
+) -> "tuple[Optional[Path], Optional[Path], float]":
+    """Build the RGB and depth videos of a session from its saved frames.
+
+    The frame rate is the one the frames were captured at (their
+    frames.jsonl timestamps), so the videos play back in real time.
+
+    Input:
+        base: the session folder (with frames.jsonl).
+        timestamp: the videos' name suffix; default: the first frame's time.
+
+    Output:
+        (rgb video path, depth video path, fps); (None, None, 0.0) without
+        frames.
+    """
+    base = Path(base)
+    frames_file = base / "frames.jsonl"
+    records = []
+    if frames_file.exists():
+        with frames_file.open() as handle:
+            records = [json.loads(line) for line in handle if line.strip()]
+    records = [r for r in records if r.get("rgb")]
+    if not records:
+        print(f"No frames in {frames_file}: no video written")
+        return None, None, 0.0
+
+    times_ns = [
+        (r.get("timestamps") or {}).get("host_unix_ns") for r in records
+    ]
+    fps = float(DEFAULT_FPS)
+    if len(records) > 1 and all(times_ns) and times_ns[-1] > times_ns[0]:
+        fps = (len(records) - 1) / ((times_ns[-1] - times_ns[0]) / 1e9)
+    if timestamp is None:
+        start = datetime.fromtimestamp(times_ns[0] / 1e9) if times_ns[0] else datetime.now()
+        timestamp = start.strftime("%Y%m%d_%H%M%S")
+
+    first = cv2.imread(str(base / records[0]["rgb"]))
+    if first is None:
+        raise OSError(f"Could not read image: {base / records[0]['rgb']}")
+    size = (first.shape[1], first.shape[0])
+    fourcc = cv2.VideoWriter_fourcc(*VIDEO_CODEC)
+    rgb_path = base / "rgb" / f"rgb_video_{timestamp}.mp4"
+    depth_path = base / "depth" / f"depth_video_{timestamp}.mp4"
+    depth_path.parent.mkdir(parents=True, exist_ok=True)
+    rgb_writer = cv2.VideoWriter(str(rgb_path), fourcc, fps, size)
+    depth_writer = cv2.VideoWriter(str(depth_path), fourcc, fps, size)
+    if not rgb_writer.isOpened() or not depth_writer.isOpened():
+        rgb_writer.release()
+        depth_writer.release()
+        raise RuntimeError(f"Could not open video writers in {base}")
+    written_depth = 0
+    try:
+        for record in records:
+            rgb = cv2.imread(str(base / record["rgb"]))
+            if rgb is None:
+                raise OSError(f"Could not read image: {base / record['rgb']}")
+            if (rgb.shape[1], rgb.shape[0]) != size:
+                rgb = cv2.resize(rgb, size)
+            rgb_writer.write(rgb)
+            depth_mm = (
+                cv2.imread(str(base / record["depth_mm"]), cv2.IMREAD_UNCHANGED)
+                if record.get("depth_mm")
+                else None
+            )
+            if depth_mm is None:
+                continue
+            # Same colormap as the live preview.
+            colormap = cv2.applyColorMap(
+                cv2.convertScaleAbs(depth_mm, alpha=0.03), cv2.COLORMAP_JET
+            )
+            if (colormap.shape[1], colormap.shape[0]) != size:
+                colormap = cv2.resize(colormap, size, interpolation=cv2.INTER_NEAREST)
+            depth_writer.write(colormap)
+            written_depth += 1
+    finally:
+        rgb_writer.release()
+        depth_writer.release()
+    if written_depth == 0:
+        depth_path.unlink(missing_ok=True)
+        depth_path = None
+    return rgb_path, depth_path, fps
+
+
+def _raise_keyboard_interrupt(signum, frame) -> None:
+    """Signal handler: stop a headless recording like Ctrl+C."""
+    raise KeyboardInterrupt
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -978,6 +1127,31 @@ def build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--make-video",
+        metavar="SESSION",
+        help=(
+            "Rebuild the RGB and depth videos of an existing session folder "
+            "(at its capture rate) and exit; no camera needed"
+        ),
+    )
+    parser.add_argument(
+        "--video",
+        action="store_true",
+        help=(
+            "--headless mode: record RGB video plus per-frame depth instead "
+            "of --images-per-shot images"
+        ),
+    )
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=None,
+        help=(
+            "--headless --video: recording length in seconds (default: until "
+            "Ctrl+C or SIGTERM)"
+        ),
+    )
+    parser.add_argument(
         "--output",
         help=(
             "Output directory name/path for --headless mode (default: an "
@@ -1002,8 +1176,27 @@ def build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Reject option combinations that would be silently ignored."""
+    if (args.video or args.duration is not None) and not args.headless:
+        parser.error("--video and --duration need --headless (press r in the preview instead)")
+    if args.duration is not None and not args.video:
+        parser.error("--duration needs --video")
+    if args.duration is not None and args.duration <= 0:
+        parser.error("--duration must be greater than zero")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = build_argument_parser().parse_args(argv)
+    parser = build_argument_parser()
+    args = parser.parse_args(argv)
+    validate_arguments(parser, args)
+    if args.make_video:
+        rgb_video, depth_video, fps = write_session_videos(Path(args.make_video))
+        if rgb_video is None:
+            return 1
+        print(f"RGB video: {rgb_video} ({fps:.2f} fps)")
+        print(f"Depth video: {depth_video}")
+        return 0
     capture: Optional[RGBDHighResCapture] = None
 
     try:
@@ -1021,7 +1214,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             exposure=args.exposure,
             gain=args.gain,
         )
-        if args.headless:
+        if args.headless and args.video:
+            capture.record_video_headless(args.output, args.duration, args.timeout)
+        elif args.headless:
             capture.capture_headless(args.output, args.images_per_shot, args.timeout)
         else:
             capture.live_preview()
