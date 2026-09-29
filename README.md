@@ -31,12 +31,13 @@ The real ZED 3i is physically attached to the Jetson (`jetson-robotnik`), not
 the laptop, and is only reachable by jumping through the Vogui main board
 (see `vogui_ros1_ros2_bridge/docs/jetson_internet_access.md` for the SSH
 jump-host setup). Before recording, lock the Jetson's clocks at maximum
-(`sudo jetson_clocks`; see [docs/jetson_performance.md](docs/jetson_performance.md)).
-Run the capture there:
+(`sudo jetson_clocks`; see [docs/jetson_performance.md](docs/jetson_performance.md)),
+but only if its 5 V supply can take it: with the current supply the camera
+drops out (see "Power supply" there). Run the capture there:
 
 ```bash
 ssh jetson
-cd ~/renee_perception
+cd ~/renee_ws/src/renee_perception
 python3 tools/record_data.py --camera zed --depth-mode QUALITY
 ```
 
@@ -46,13 +47,13 @@ operation). `rsync` is incremental, so it's safe to re-run after every
 session — it only copies what's new:
 
 ```bash
-rsync -avz --progress jetson:~/renee_perception/data/ /path/to/renee_perception/data/
+rsync -avz --progress jetson:~/renee_ws/src/renee_perception/data/ /path/to/renee_perception/data/
 ```
 
 To grab a single session instead of everything:
 
 ```bash
-scp -r jetson:~/renee_perception/data/zed_highres_<timestamp> /path/to/renee_perception/data/
+scp -r jetson:~/renee_ws/src/renee_perception/data/zed_highres_<timestamp> /path/to/renee_perception/data/
 ```
 
 ## Real-hardware ZED capture from ROS2 (`/capture_zed_image`)
@@ -72,12 +73,12 @@ Internally it runs, over SSH, the headless mode added to `record_data.py`
 for exactly this purpose (no `DISPLAY`/TTY required):
 
 ```bash
-ssh jetson "cd ~/renee_perception && python3 tools/record_data.py \
-    --camera zed --headless --output ~/renee_perception/<session> \
+ssh jetson "cd ~/renee_ws/src/renee_perception && python3 tools/record_data.py \
+    --camera zed --headless --output ~/renee_ws/src/renee_perception/<session> \
     --images-per-shot 10"
 ```
 
-The dataset stays on the Jetson under `~/renee_perception/<session>`; the
+The dataset stays on the Jetson under `~/renee_ws/src/renee_perception/<session>`; the
 result's `output_dir` reports that path. Transfer it manually afterwards,
 e.g. `./sync_jetson.sh --pull` (the laptop's `data/` is synced from the
 Jetson's `data/`, so use a `session_dir` under `data/` for that). This is a

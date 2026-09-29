@@ -69,6 +69,17 @@ DEFAULT_BURST_FPS = 2.0
 MIN_RECOMMENDED_SWEEP_FPS = 2.0
 DEFAULT_IMAGES_PER_SHOT = 30
 
+# Torn-frame check (ZED only). When the USB link drops data (e.g. an
+# under-powered Jetson/hub), the ZED image arrives as horizontal bands that
+# are shifted/out of place. Each band edge is a row boundary where nearly the
+# whole row jumps in brightness. Calibrated on 2026-09-28: 0 false positives
+# on 585 clean ZED frames (incl. full-width rails), ~50% of torn frames caught.
+TEAR_CHECK_WIDTH = 672
+TEAR_ROW_GAP = 2
+TEAR_PIXEL_JUMP = 30
+TEAR_ROW_FRACTION = 0.7
+TORN_MIN_SEAMS = 3
+
 DEPTH_MODES = ("NEURAL", "ULTRA", "QUALITY", "PERFORMANCE")
 VIDEO_CODEC = "mp4v"
 PREVIEW_COLOUR = (0, 255, 0)
@@ -163,6 +174,22 @@ class CapturePaths:
         return paths
 
 
+def count_tear_seams(color_bgr: np.ndarray) -> int:
+    """Count full-width seams (row boundaries where most of the row jumps).
+
+    Resized to TEAR_CHECK_WIDTH first, so the thresholds hold for any stream
+    resolution. Frames with TORN_MIN_SEAMS or more seams are likely torn.
+    """
+    gray = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2GRAY)
+    height = int(round(gray.shape[0] * TEAR_CHECK_WIDTH / gray.shape[1]))
+    gray = cv2.resize(
+        gray, (TEAR_CHECK_WIDTH, height), interpolation=cv2.INTER_AREA
+    ).astype(np.float32)
+    jump = np.abs(gray[TEAR_ROW_GAP:] - gray[:-TEAR_ROW_GAP]) > TEAR_PIXEL_JUMP
+    seam_rows = (jump.mean(axis=1) > TEAR_ROW_FRACTION).astype(np.int8)
+    return int(np.sum(np.diff(seam_rows, prepend=0) == 1))
+
+
 def positive_int(value: str) -> int:
     """Parse a positive integer for argparse."""
     parsed = int(value)
@@ -195,6 +222,7 @@ class RGBDHighResCapture:
         self.save_aligned_depth = save_aligned_depth
         self.paths: Optional[CapturePaths] = None
         self.session: Optional[ScanSession] = None
+        self.torn_frames = 0
 
         if camera_type == "zed":
             from renception.drivers.zed import ZedCamera
@@ -292,6 +320,7 @@ class RGBDHighResCapture:
                 or None
             )
         self.paths = CapturePaths.create(self.camera_type, output_name)
+        self.torn_frames = 0
         print(f"Created directories in: {self.paths.base}")
 
         if self.calibration is not None:
@@ -502,6 +531,18 @@ class RGBDHighResCapture:
                 "Repeat the sweep more slowly or reduce the stream resolution."
             )
 
+    def _report_torn_frames(self) -> None:
+        """Warn when the session has frames flagged as torn (ZED only)."""
+        if self.torn_frames == 0 or self.session is None:
+            return
+        print(
+            f"WARNING: {self.torn_frames}/{len(self.session.keyframes)} frames "
+            "look torn (horizontal bands, see 'torn' in frames.jsonl). The "
+            "check misses milder tears, so expect more. This comes from USB "
+            "data loss: check the Jetson's 5 V supply and the camera's USB "
+            "connection/hub."
+        )
+
     def _save_image_pair(self, frame: Frame) -> bool:
         """Save one calibration sample and append both dataset manifests."""
         if self.paths is None or self.session is None:
@@ -590,6 +631,13 @@ class RGBDHighResCapture:
             "timestamps": {**timestamps, "host_unix_ns": host_unix_ns},
             "imu_sample_count": len(imu_samples),
         }
+        tear_seams = None
+        if self.camera_type == "zed":
+            tear_seams = count_tear_seams(frame.color_image)
+            frame_record["tear_seams"] = tear_seams
+            frame_record["torn"] = tear_seams >= TORN_MIN_SEAMS
+            if frame_record["torn"]:
+                self.torn_frames += 1
         self._append_jsonl(paths.frames_file, frame_record)
 
         print(f"✓ Captured high-res image pair: {filename_timestamp}")
@@ -603,6 +651,8 @@ class RGBDHighResCapture:
         if ir_left_relative and ir_right_relative:
             print(f"  Stereo IR: {ir_left_path}, {ir_right_path}")
         print(f"  Session: {paths.session_file} (keyframe {keyframe.station_id})")
+        if tear_seams is not None and tear_seams >= TORN_MIN_SEAMS:
+            print(f"  WARNING: frame looks torn ({tear_seams} seams)")
         return True
 
     def _capture_shot(
@@ -682,6 +732,7 @@ class RGBDHighResCapture:
             cv2.destroyAllWindows()
 
         print(f"Image capture session complete: {total_saved} image pairs saved")
+        self._report_torn_frames()
         print("Resuming live preview...")
 
     def capture_headless(
@@ -709,6 +760,7 @@ class RGBDHighResCapture:
             print(f"  {self._centre_depth_text(frame.depth_m)}", flush=True)
             deadline = time.monotonic() + timeout
 
+        self._report_torn_frames()
         print(f"HEADLESS_CAPTURE_DONE: {self.paths.base} images={saved_count}")
         return saved_count
 
@@ -783,6 +835,7 @@ class RGBDHighResCapture:
         elapsed_seconds = time.monotonic() - started_at
         print(f"Burst capture complete: {capture_count} RGB-D image pairs saved")
         self._report_capture_rate(capture_count, elapsed_seconds)
+        self._report_torn_frames()
         print("Resuming live preview...")
 
     def record_video(self) -> None:
@@ -906,6 +959,7 @@ class RGBDHighResCapture:
         print(f"  Frames recorded: {frame_count}")
         print(f"  Duration: {elapsed_seconds:.2f} seconds")
         self._report_capture_rate(frame_count, elapsed_seconds)
+        self._report_torn_frames()
         return frame_count
 
     def live_preview(self) -> None:

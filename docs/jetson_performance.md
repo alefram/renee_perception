@@ -102,7 +102,111 @@ the RGB, depth and depth-PNG files for every frame is the main cost. To
 measure the rate with the clocks locked:
 
 ```bash
-cd ~/renee_perception && python3 tools/record_data.py --headless --video --duration 30
+cd ~/renee_ws/src/renee_perception && python3 tools/record_data.py --headless --video --duration 30
 ```
 
 The rate is printed in the `RGB video: … (X.XX fps, the capture rate)` line.
+
+## Power supply
+
+On 2026-09-28 the ZED 2i kept dropping off the USB bus (`error -71`), and
+its images came out torn (horizontal bands shifted out of place). The cause
+is the Jetson's 5 V input: it sags under load. Measured with the INA3221
+monitor (needs root):
+
+```bash
+d=/sys/devices/50000000.host1x/546c0000.i2c/i2c-6/6-0040/iio:device0
+sudo sh -c "while true; do echo \"\$(date +%H:%M:%S) \$(cat $d/in_voltage0_input) mV \$(cat $d/in_current0_input) mA\"; sleep 0.5; done" | tee /tmp/power.log
+```
+
+| Condition | `POM_5V_IN` |
+|---|---|
+| Idle, no ZED | 4.86–4.91 V at 0.35 A |
+| MAXN, ZED SDK starting | **4.55 V at 1.5 A**: `OC ALARM` and `-71` in the same second, camera lost |
+| 5 W mode (`sudo nvpmodel -m 1`), recording | 4.66 V minimum at 1.0 A: no disconnects, frames still partly torn |
+
+That's about 0.27 Ω in the supply path; the USB spec needs at least 4.75 V at
+the port, and the ZED sits behind a Genesys hub (`05e3:0620`) on top of it.
+The ZED cable also ran through a second USB3 extension inside the Vogui;
+without it the camera started working, so the plan is to replace that cable.
+Until the cable/supply is fixed (no passive USB extensions; a 5 V converter
+rated for 4 A or more, set to 5.1–5.2 V, with short thick wires; or a powered
+USB3 hub for the ZED):
+
+- Don't run `jetson_clocks`: it raises the load and makes things worse.
+- 5 W mode is the most stable setting. It persists across reboots; go back
+  to MAXN with `sudo nvpmodel -m 0`.
+- `record_data.py` flags frames that look torn (`tear_seams` and `torn` in
+  `frames.jsonl`) and prints a warning at the end of the session. The check
+  catches about half of the torn frames and misses milder tears, so a
+  session with any flagged frames has more.
+
+## Checking the ZED and power (for the next test)
+
+Run these on the Jetson (`ssh jetson`). Keep the power monitor from
+[Power supply](#power-supply) running in a second terminal during the
+recording; it writes `/tmp/power.log`.
+
+**1. Is the ZED connected, and where?**
+
+```bash
+lsusb | grep 2b03          # ZED 2i = 2b03:f880; nothing printed = not detected
+lsusb -t                   # the ZED should show 5000M (USB3) with Driver=uvcvideo
+ls /dev/video*             # /dev/video0 should exist
+```
+
+**2. Watch USB errors live** (plug/unplug the camera while this runs):
+
+```bash
+journalctl -kf | grep -E "OC ALARM|usb|uvc"
+```
+
+| Message | Meaning |
+|---|---|
+| `New USB device found, idVendor=2b03` | ZED detected |
+| `error -71`, `Device not responding to setup address` | Power or signal problem on the link |
+| `Non-zero status (-71) in video completion handler` | Video data arriving corrupted |
+| `unable to enumerate USB device` | The hub gave up; unplug and replug the ZED |
+| `soctherm: OC ALARM` | The Jetson's over-current alarm: 5 V supply overloaded |
+
+`Entity type for entity ... was not initialized!` is normal for the ZED.
+
+**3. Power mode and clocks**
+
+```bash
+nvpmodel -q                  # MAXN (0) or 5W (1)
+sudo jetson_clocks --show    # clocks locked when MinFreq = MaxFreq
+```
+
+**4. 30 s test recording**, then count errors since it started:
+
+```bash
+cd ~/renee_ws/src/renee_perception
+T=$(date +%H:%M:%S)
+python3 tools/record_data.py --headless --video --duration 30
+echo "USB errors: $(journalctl -k --since "$T" | grep -v 'OC ALARM' | grep -cE 'disconnect|reset|-71')"
+echo "OC alarms:  $(journalctl -k --since "$T" | grep -c 'OC ALARM')"
+awk -v t="$T" '$1>=t {if(!m||$2<m){m=$2;i=$4}} END{print "min voltage:", m, "mV at", i, "mA"}' /tmp/power.log
+```
+
+The end of the `record_data.py` output also prints `WARNING: X/Y frames look
+torn` if any frame was flagged. To list the flagged frames of the latest
+session:
+
+```bash
+d=$(ls -td data/*/ | head -1)
+grep -c '"torn":true' ${d}frames.jsonl
+```
+
+**A good result:** 0 USB errors, 0 OC alarms, minimum voltage ≥ 4.75 V, no
+torn-frame warning. Then try MAXN (`sudo nvpmodel -m 0`) and repeat.
+
+**5. The Vogui's battery** (from the laptop):
+
+```bash
+ssh vogui-board 'source /opt/ros/*/setup.bash; rostopic echo -n1 /robot/battery_estimator/data'
+```
+
+`voltage` is the battery (about 52–53 V), `level` the charge in %. The
+Jetson's 5 V comes from this battery through a converter, so a low 5 V with
+a healthy battery points at the converter or the wiring.
