@@ -1,0 +1,22 @@
+# ZED camera link service for the Jetson (see README "Camera link service").
+# NOT USED BY DEFAULT: the service is managed with tools/camera_link_ctl.sh (no systemd).
+# Optional alternative only; NOT installed automatically. To install (needs sudo on the Jetson):
+#   sudo cp deploy/camera-link.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now camera-link.service
+#
+# Only ONE process can open the ZED. Make sure nothing else holds it first, e.g. the
+# ROS1 zed_wrapper that jetson-ros.service / bringup.sh launches inside `screen -S zed`.
+[Unit]
+Description=ZED camera link service (renee_perception)
+After=network.target
+
+[Service]
+User=jetson
+WorkingDirectory=/home/jetson/renee_ws/src/renee_perception
+# Loopback only: the PC reaches it through an SSH tunnel/jump. Use --host 0.0.0.0 for a direct route.
+ExecStart=/usr/bin/python3 tools/camera_link_service.py --host 127.0.0.1 --port 7788
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
