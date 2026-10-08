@@ -716,7 +716,7 @@ def parse_args(argv=None):
     parser.add_argument('--source', choices=['zed', 'synthetic'], default='zed')
     parser.add_argument('--resolution', choices=sorted(RESOLUTIONS), default='HD720')
     parser.add_argument('--fps', type=int, default=15)
-    parser.add_argument('--depth-mode', choices=DEPTH_MODES, default='QUALITY')
+    parser.add_argument('--depth-mode', choices=DEPTH_MODES, default='NEURAL')
     parser.add_argument('--depth-min', type=float, default=0.3, help='metres')
     parser.add_argument('--depth-max', type=float, default=20.0, help='metres')
     parser.add_argument('--idle-period', type=float, default=0.2,
